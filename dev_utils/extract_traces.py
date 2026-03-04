@@ -18,15 +18,38 @@ API_KEY_ENV_VARS = [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
-    "MY_HF_TOKEN"
+    "BEN_HF_TOKEN"
 ]
 
 API_KEY_PATTERNS = [
-    "sk-proj",
-    "sk-ant",
-    "AIzaSy",
-    "sk-",
-    "hf_",
+    "sk-proj",      # OpenAI project keys
+    "sk-ant",       # Anthropic keys
+    "AIzaSy",       # Google/Gemini keys
+    "sk-",          # Generic OpenAI keys
+    "hf_",          # HuggingFace tokens
+    # AWS
+    "AKIA",         # AWS access key IDs
+    # GitHub
+    "ghp_",         # GitHub personal access tokens
+    "gho_",         # GitHub OAuth tokens
+    "ghs_",         # GitHub app installation tokens
+    "ghr_",         # GitHub refresh tokens
+    # GitLab
+    "glpat-",       # GitLab personal access tokens
+    # AI services
+    "sk-or-",       # OpenRouter
+    "r8_",          # Replicate
+    "xai-",         # xAI/Grok
+    "nvapi-",       # NVIDIA
+    # Slack
+    "xoxb-",        # Slack bot tokens
+    "xoxp-",        # Slack user tokens
+    # Stripe
+    "sk_live_",     # Stripe live secret keys
+    "sk_test_",     # Stripe test secret keys
+    "whsec_",       # Stripe webhook secrets
+    # Other
+    "SG.",          # SendGrid API keys
 ]
 
 
