@@ -1,4 +1,4 @@
-# PostTrainBench: Measuring AI Ability to Perform LLM Post-Training
+# PostTrainBench: Can LLM Agents Automate LLM Post-Training?
 
 [![Website](https://img.shields.io/badge/Website-posttrainbench.com-c17d5a)](http://posttrainbench.com/)
 
@@ -234,9 +234,11 @@ For Claude Code, we add the following line (Claude Code can run tasks in the bac
 If you found PostTrainBench useful, please cite us as:
 
 ```bibtex
-@misc{posttrainbench_2025,
-  title={PostTrainBench: Measuring AI Ability to Perform LLM Post-Training},
-  author={Rank, Ben and Bhatnagar, Hardik and Bethge, Matthias and Andriushchenko, Maksym},
-  year={2025}
+@inproceedings{posttrainbench_2026,
+  title     = {{PostTrainBench}: Can {LLM} Agents Automate {LLM} Post-Training?},
+  author    = {Rank, Ben and Bhatnagar, Hardik and Prabhu, Ameya and Eisenberg, Shira and Nguyen, Karina and Bethge, Matthias and Andriushchenko, Maksym},
+  booktitle = {ICLR 2026 Workshop on AI with Recursive Self-Improvement (RSI)},
+  year      = {2026},
+  url       = {https://openreview.net/forum?id=FJKOIxkUxo}
 }
 ```
