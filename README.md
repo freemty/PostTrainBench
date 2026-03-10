@@ -4,7 +4,8 @@
 
 We introduce PostTrainBench, a benchmark that measures the ability of CLI agents to post-train pre-trained large language models (LLMs). In PostTrainBench, the agent's task is to improve the performance of a base LLM on a given benchmark. The agent is given access to an evaluation script and 10 hours on an H100 GPU. Performance is measured by the benchmark score of the post-trained LLM. This setup naturally evaluates an agent's ability to conduct AI R&D.
 
-> **Note:** This repository is currently designed for our internal HPC cluster (HTCondor) and may require significant adaptation to run in other environments. We plan to add [Harbor](https://github.com/harbor-framework/harbor) support, which will make it straightforward to run on rented hardware (e.g., cloud GPUs). See our [PR](https://github.com/aisa-group/PostTrainBench/pull/8).
+> [!IMPORTANT]
+> **Harbor support coming soon!** This repository currently targets our internal HPC cluster (HTCondor). We are adding [Harbor](https://github.com/harbor-framework/harbor) support to make it straightforward to run on rented hardware (e.g., cloud GPUs). See our [PR](https://github.com/aisa-group/PostTrainBench/pull/8).
 
 ## Leaderboard
 
