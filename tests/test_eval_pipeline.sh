@@ -1,0 +1,276 @@
+#!/bin/bash
+# Test 3: Evaluation Pipeline
+#
+# Verifies the eval pipeline works end-to-end before real experiments:
+#   - vLLM can load a model from an external path inside the container
+#   - Chat templates are accessible via the relative path used by run_task.sh
+#   - evaluate.py can parse model config and select correct template
+#   - The full eval apptainer invocation (matching run_task.sh) doesn't crash
+#   - metrics.json output path is writable from inside the container
+#
+# This test uses a REAL base model from HF cache to do a minimal vLLM smoke test.
+# If no model is cached, it falls back to structural checks only.
+#
+# Usage: cd ~/PostTrainBench && bash tests/test_eval_pipeline.sh [model_path]
+
+set -eo pipefail
+source "$(dirname "$0")/preflight_utils.sh"
+
+MODEL_PATH="${1:-}"
+REPO_ROOT="$(pwd)"
+
+if [ ! -f "$CONTAINER" ]; then
+    fail "Container not found: $CONTAINER"
+    summary
+fi
+
+echo "--- 3a. Eval Templates ---"
+
+TEMPLATES_DIR="src/eval/templates"
+for template in qwen3.jinja gemma3.jinja smollm.jinja; do
+    if [ -f "${TEMPLATES_DIR}/${template}" ]; then
+        pass "Template exists: ${template}"
+    else
+        fail "Template missing: ${TEMPLATES_DIR}/${template}"
+    fi
+done
+
+echo ""
+echo "--- 3b. Evaluate Scripts ---"
+
+for task_dir in src/eval/tasks/*/; do
+    task_name=$(basename "$task_dir")
+    if [ -f "${task_dir}/evaluate.py" ]; then
+        pass "evaluate.py exists for ${task_name}"
+    else
+        fail "evaluate.py missing for ${task_name}"
+    fi
+    if [ -f "${task_dir}/benchmark.txt" ]; then
+        pass "benchmark.txt exists for ${task_name}"
+    else
+        fail "benchmark.txt missing for ${task_name}"
+    fi
+done
+
+echo ""
+echo "--- 3c. Template Relative Path (inside container) ---"
+# run_task.sh uses: --pwd "$(pwd)/src/eval/tasks/${TASK}" and --templates-dir ../../../../src/eval/templates
+# Verify this relative path resolves correctly inside the container
+
+for task_name in gsm8k humaneval aime2025; do
+    if [ ! -d "src/eval/tasks/${task_name}" ]; then
+        continue
+    fi
+    RELPATH_OUT=$(apptainer exec --nv --writable-tmpfs \
+        --bind "${REPO_ROOT}:${REPO_ROOT}" \
+        --pwd "${REPO_ROOT}/src/eval/tasks/${task_name}" \
+        "$CONTAINER" python3 -c "
+import os
+tpl_dir = '../../../../src/eval/templates'
+resolved = os.path.abspath(tpl_dir)
+exists = os.path.isdir(resolved)
+qwen = os.path.isfile(os.path.join(resolved, 'qwen3.jinja'))
+print(f'{resolved} exists={exists} qwen={qwen}')
+" 2>/dev/null) || RELPATH_OUT="ERROR"
+
+    if echo "$RELPATH_OUT" | grep -q "exists=True.*qwen=True"; then
+        pass "Relative template path OK for ${task_name}"
+    else
+        fail "Relative template path broken for ${task_name}: $RELPATH_OUT"
+    fi
+done
+
+echo ""
+echo "--- 3d. EVAL_DIR Path Binding (simulated) ---"
+# The core fix: EVAL_DIR on external storage must be accessible inside eval container
+
+FAKE_EVAL_DIR="${PTB_TMP_BASE}/preflight_eval_bind_$$"
+FAKE_MODEL_DIR="${FAKE_EVAL_DIR}/final_model"
+mkdir -p "${FAKE_MODEL_DIR}"
+
+# Create a minimal config.json (enough for evaluate.py to parse)
+cat > "${FAKE_MODEL_DIR}/config.json" << 'JSONEOF'
+{
+  "architectures": ["Qwen2ForCausalLM"],
+  "model_type": "qwen2",
+  "hidden_size": 1536,
+  "num_hidden_layers": 28
+}
+JSONEOF
+
+# Test 1: Can the container see the external path?
+BIND_CHECK=$(apptainer exec --nv --writable-tmpfs \
+    --bind "${REPO_ROOT}:${REPO_ROOT}" \
+    --bind "${FAKE_EVAL_DIR}:${FAKE_EVAL_DIR}" \
+    "$CONTAINER" python3 -c "
+import os, json
+config_path = '${FAKE_MODEL_DIR}/config.json'
+if os.path.isfile(config_path):
+    with open(config_path) as f:
+        cfg = json.load(f)
+    print(f'OK arch={cfg[\"architectures\"][0]}')
+else:
+    print('NOT_FOUND')
+" 2>/dev/null) || BIND_CHECK="ERROR"
+
+if echo "$BIND_CHECK" | grep -q "^OK"; then
+    pass "EVAL_DIR bind mount works: $BIND_CHECK"
+else
+    fail "EVAL_DIR bind mount failed: $BIND_CHECK"
+fi
+
+# Test 2: Can metrics.json be written from inside container?
+METRICS_FILE="${FAKE_EVAL_DIR}/metrics_test.json"
+apptainer exec --nv --writable-tmpfs \
+    --bind "${FAKE_EVAL_DIR}:${FAKE_EVAL_DIR}" \
+    "$CONTAINER" python3 -c "
+import json
+with open('${METRICS_FILE}', 'w') as f:
+    json.dump({'test': True}, f)
+" 2>/dev/null || true
+
+if [ -f "${METRICS_FILE}" ]; then
+    pass "metrics.json writable from inside container"
+else
+    fail "Cannot write metrics.json from inside container to EVAL_DIR"
+fi
+
+rm -rf "${FAKE_EVAL_DIR}"
+
+echo ""
+echo "--- 3e. vLLM Import & Config ---"
+
+VLLM_CHECK=$(apptainer exec --nv --writable-tmpfs "$CONTAINER" python3 -c "
+import vllm
+print(f'vllm={vllm.__version__}')
+from vllm import LLM
+print('LLM_import=OK')
+" 2>/dev/null) || VLLM_CHECK="ERROR"
+
+if echo "$VLLM_CHECK" | grep -q "vllm="; then
+    pass "vLLM importable: $(echo "$VLLM_CHECK" | head -1)"
+else
+    fail "vLLM import failed: $VLLM_CHECK"
+fi
+
+if echo "$VLLM_CHECK" | grep -q "LLM_import=OK"; then
+    pass "vLLM LLM class importable"
+else
+    fail "vLLM LLM class import failed"
+fi
+
+echo ""
+echo "--- 3f. vLLM Serve Smoke Test ---"
+# Try to start vLLM with a real model for a few seconds.
+# This catches the exact error we hit: OSError on local path.
+
+# Find a model to test with
+if [ -n "$MODEL_PATH" ] && [ -d "$MODEL_PATH" ]; then
+    TEST_MODEL="$MODEL_PATH"
+elif [ -d "${FAKE_EVAL_DIR:-/nonexistent}/final_model" ]; then
+    TEST_MODEL="${FAKE_EVAL_DIR}/final_model"
+else
+    # Try to find a small cached model in HF cache
+    TEST_MODEL=""
+    if [ -d "${HF_HOME}/hub" ]; then
+        for snapshot_dir in "${HF_HOME}/hub"/models--*/snapshots/*/; do
+            if [ -f "${snapshot_dir}/config.json" ] && [ -f "${snapshot_dir}/tokenizer.json" ]; then
+                # Check it's a small model (< 5GB safetensors)
+                TOTAL_SIZE=$(find "$snapshot_dir" -name "*.safetensors" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
+                if [ "${TOTAL_SIZE:-0}" -gt 0 ] && [ "${TOTAL_SIZE:-0}" -lt 5368709120 ]; then
+                    # Remove trailing slash (vLLM 0.11.0 treats paths with trailing / as repo IDs)
+                    TEST_MODEL="${snapshot_dir%/}"
+                    break
+                fi
+            fi
+        done
+    fi
+fi
+
+if [ -z "$TEST_MODEL" ]; then
+    skip "No model available for vLLM serve test (pass a model path as argument)"
+else
+    echo "  Testing with model: $TEST_MODEL"
+
+    # Prepare bind mounts (model might be on external storage)
+    BIND_ARGS="--bind ${REPO_ROOT}:${REPO_ROOT}"
+    # Add model path bind if it's outside REPO_ROOT
+    case "$TEST_MODEL" in
+        ${REPO_ROOT}/*) ;;
+        *) BIND_ARGS="${BIND_ARGS} --bind $(dirname ${TEST_MODEL}):$(dirname ${TEST_MODEL})" ;;
+    esac
+
+    # Start vLLM serve, wait a few seconds, check if it's alive
+    VLLM_LOG="${PTB_TMP_BASE}/preflight_vllm_$$"
+    mkdir -p "$(dirname "$VLLM_LOG")"
+
+    timeout 30s apptainer exec --nv --writable-tmpfs \
+        $BIND_ARGS \
+        --pwd "${REPO_ROOT}/src/eval/tasks/gsm8k" \
+        "$CONTAINER" \
+        vllm serve "$TEST_MODEL" \
+            --host 0.0.0.0 --port 48199 \
+            --api-key inspectai \
+            --gpu-memory-utilization 0.3 \
+            --max-model-len 512 \
+        > "$VLLM_LOG" 2>&1 &
+    VLLM_PID=$!
+
+    # Wait for startup or failure
+    VLLM_STARTED=false
+    for i in $(seq 1 15); do
+        sleep 2
+        if ! kill -0 $VLLM_PID 2>/dev/null; then
+            # Process died
+            break
+        fi
+        if grep -q "Uvicorn running on" "$VLLM_LOG" 2>/dev/null; then
+            VLLM_STARTED=true
+            break
+        fi
+        if grep -q "Application startup complete" "$VLLM_LOG" 2>/dev/null; then
+            VLLM_STARTED=true
+            break
+        fi
+    done
+
+    if $VLLM_STARTED; then
+        pass "vLLM serve started successfully"
+    else
+        VLLM_ERR=$(grep -i "error\|exception\|traceback\|OSError" "$VLLM_LOG" 2>/dev/null | tail -3)
+        if [ -n "$VLLM_ERR" ]; then
+            fail "vLLM serve crashed: $VLLM_ERR"
+        elif kill -0 $VLLM_PID 2>/dev/null; then
+            warn "vLLM serve still loading after 30s (may be OK for large models)"
+        else
+            fail "vLLM serve exited (check $VLLM_LOG)"
+        fi
+    fi
+
+    # Cleanup
+    kill $VLLM_PID 2>/dev/null || true
+    wait $VLLM_PID 2>/dev/null || true
+    # Kill any leftover GPU processes from this test
+    nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    sleep 2
+    rm -f "$VLLM_LOG"
+fi
+
+echo ""
+echo "--- 3g. Prompt Generation ---"
+
+# Check that get_prompt.py works (requires python3)
+PROMPT_OUT=$(python3 src/eval/general/get_prompt.py \
+    --model-to-train "Qwen/Qwen3-1.7B-Base" \
+    --benchmark-id "gsm8k" \
+    --num-hours 1 \
+    --agent "claude" 2>/dev/null | head -5) || PROMPT_OUT="ERROR"
+
+if [ -n "$PROMPT_OUT" ] && [ "$PROMPT_OUT" != "ERROR" ]; then
+    PROMPT_LEN=${#PROMPT_OUT}
+    pass "Prompt generation works (${PROMPT_LEN} chars)"
+else
+    fail "Prompt generation failed"
+fi
+
+summary

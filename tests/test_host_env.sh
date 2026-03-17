@@ -1,0 +1,165 @@
+#!/bin/bash
+# Test 1: Host Environment
+#
+# Verifies the host machine is ready before launching experiments:
+#   - python3, apptainer, fuse-overlayfs available
+#   - GPU accessible
+#   - Disk space sufficient
+#   - Required env vars / config files present
+#   - Container .sif file exists
+#   - Results & tmp directories writable on large disk
+#
+# Usage: cd ~/PostTrainBench && bash tests/test_host_env.sh
+
+set -eo pipefail
+source "$(dirname "$0")/preflight_utils.sh"
+
+echo "--- 1a. Required Binaries ---"
+
+for cmd in python3 apptainer fuse-overlayfs fusermount nvidia-smi uuidgen; do
+    if which "$cmd" >/dev/null 2>&1; then
+        pass "$cmd found: $(which $cmd)"
+    else
+        case "$cmd" in
+            fuse-overlayfs|fusermount)
+                fail "$cmd not found (required for HF cache overlay)";;
+            *)
+                fail "$cmd not found";;
+        esac
+    fi
+done
+
+# python (not python3) is NOT required but check if it exists
+if which python >/dev/null 2>&1; then
+    pass "python symlink exists ($(python --version 2>&1))"
+else
+    warn "No 'python' command — ensure all scripts use 'python3'"
+fi
+
+echo ""
+echo "--- 1b. GPU ---"
+
+if nvidia-smi >/dev/null 2>&1; then
+    GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
+    GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | xargs)
+    pass "GPU detected: ${GPU_COUNT}x ${GPU_NAME} (${GPU_MEM} MiB each)"
+
+    if [ "${GPU_MEM:-0}" -ge 20000 ]; then
+        pass "GPU memory >= 20GB (sufficient for training + vLLM)"
+    else
+        warn "GPU memory ${GPU_MEM} MiB — may be tight for larger models"
+    fi
+else
+    fail "nvidia-smi failed — no GPU or drivers missing"
+fi
+
+echo ""
+echo "--- 1c. Disk Space ---"
+
+check_disk() {
+    local path="$1"
+    local min_gb="$2"
+    local label="$3"
+
+    if [ ! -d "$path" ]; then
+        path="$(dirname "$path")"
+    fi
+
+    if [ -d "$path" ]; then
+        # Use df -P for POSIX portable output (single-line per filesystem)
+        local avail_kb=$(df -P "$path" 2>/dev/null | tail -1 | awk '{print $4}')
+        local avail_gb=$((avail_kb / 1024 / 1024))
+        if [ "$avail_gb" -ge "$min_gb" ]; then
+            pass "$label: ${avail_gb}GB available (>= ${min_gb}GB)"
+        else
+            fail "$label: only ${avail_gb}GB available (need ${min_gb}GB)"
+        fi
+    else
+        warn "$label: path $path does not exist"
+    fi
+}
+
+check_disk "${POST_TRAIN_BENCH_RESULTS_DIR}" 50 "Results dir"
+check_disk "${PTB_TMP_BASE}" 100 "Tmp dir (overlays + job tmp)"
+check_disk "/tmp" 5 "System /tmp"
+
+echo ""
+echo "--- 1d. Writable Directories ---"
+
+for dir_path in "${POST_TRAIN_BENCH_RESULTS_DIR}" "${PTB_TMP_BASE}"; do
+    mkdir -p "$dir_path" 2>/dev/null || true
+    TEST_FILE="${dir_path}/.preflight_write_test_$$"
+    if echo "test" > "$TEST_FILE" 2>/dev/null; then
+        rm -f "$TEST_FILE"
+        pass "$dir_path is writable"
+    else
+        fail "$dir_path is NOT writable"
+    fi
+done
+
+echo ""
+echo "--- 1e. Container ---"
+
+if [ -f "$CONTAINER" ]; then
+    CONTAINER_SIZE=$(du -sh "$CONTAINER" 2>/dev/null | cut -f1)
+    pass "Container exists: $CONTAINER ($CONTAINER_SIZE)"
+else
+    fail "Container not found: $CONTAINER"
+fi
+
+echo ""
+echo "--- 1f. HF Cache ---"
+
+if [ -d "${HF_HOME}" ]; then
+    HF_SIZE=$(du -sh "${HF_HOME}" 2>/dev/null | cut -f1)
+    pass "HF cache exists: ${HF_HOME} ($HF_SIZE)"
+else
+    warn "HF cache dir not found: ${HF_HOME} — first run will download models"
+fi
+
+echo ""
+echo "--- 1g. Agent API Credentials ---"
+
+# Claude / Bedrock
+CLAUDE_SETTINGS="$HOME/.claude/settings.local.json"
+if [ -f "$CLAUDE_SETTINGS" ]; then
+    if grep -q 'CLAUDE_CODE_USE_BEDROCK' "$CLAUDE_SETTINGS" 2>/dev/null; then
+        pass "Bedrock config found in settings.local.json"
+        if grep -q 'AWS_ACCESS_KEY_ID' "$CLAUDE_SETTINGS" 2>/dev/null; then
+            pass "AWS credentials in Bedrock config"
+        elif [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+            pass "AWS credentials via env var"
+        else
+            fail "Bedrock enabled but no AWS credentials found"
+        fi
+    else
+        if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            pass "ANTHROPIC_API_KEY set (direct API mode)"
+        else
+            warn "No Bedrock config and no ANTHROPIC_API_KEY"
+        fi
+    fi
+else
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        pass "ANTHROPIC_API_KEY set"
+    else
+        warn "No Claude credentials configured"
+    fi
+fi
+
+# Codex / OpenAI
+if [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${CODEX_API_KEY:-}" ]; then
+    pass "OpenAI/Codex API key set"
+else
+    warn "No OPENAI_API_KEY or CODEX_API_KEY (codex agent won't work)"
+fi
+
+# Gemini
+if [ -n "${GEMINI_API_KEY:-}" ]; then
+    pass "GEMINI_API_KEY set"
+else
+    warn "No GEMINI_API_KEY (gemini agent won't work)"
+fi
+
+summary
