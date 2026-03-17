@@ -49,6 +49,13 @@ if [ -d "src/eval/tasks/${EVALUATION_TASK}/task_context" ]; then
 fi
 cp -r "containers/other_home_data/.codex" "${JOB_DIR}/"
 
+# Copy Claude Code config if present (for Bedrock auth)
+if [ -d "$HOME/.claude" ]; then
+    mkdir -p "${JOB_DIR}/.claude"
+    cp "$HOME/.claude/settings.local.json" "${JOB_DIR}/.claude/" 2>/dev/null
+    cp "$HOME/.claude/settings.json" "${JOB_DIR}/.claude/" 2>/dev/null
+fi
+
 BENCHMARK=$(cat src/eval/tasks/${EVALUATION_TASK}/benchmark.txt)
 PROMPT=$(python src/eval/general/get_prompt.py --model-to-train "$MODEL_TO_TRAIN" --benchmark-id "$EVALUATION_TASK" --num-hours "$NUM_HOURS" --agent "${AGENT}")
 echo "$PROMPT" > "${EVAL_DIR}/prompt.txt"
@@ -120,6 +127,9 @@ solve_task() {
         --env ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
         --env CODEX_API_KEY="${CODEX_API_KEY}" \
         --env GEMINI_API_KEY="${GEMINI_API_KEY}" \
+        --env AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+        --env AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+        --env AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}" \
         --env VLLM_API_KEY="inspectai" \
         --env PYTHONNOUSERSITE="1" \
         --env PROMPT="${PROMPT}" \
