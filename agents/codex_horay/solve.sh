@@ -7,9 +7,16 @@ unset ANTHROPIC_API_KEY
 unset GEMINI_API_KEY
 unset OPENAI_API_KEY
 
+# Gemini models need chat completions API (responses API returns 502)
+if [[ "$AGENT_CONFIG" == ge* ]]; then
+    HORAY_PROVIDER="horay_chat"
+else
+    HORAY_PROVIDER="horay"
+fi
+
 codex --search exec --json \
   -c model_reasoning_summary=detailed \
-  -c "model_provider=\"horay\"" \
+  -c "model_provider=\"${HORAY_PROVIDER}\"" \
   -c "disable_response_storage=true" \
   --skip-git-repo-check --yolo \
   --model "$AGENT_CONFIG" \
