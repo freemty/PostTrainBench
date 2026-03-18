@@ -147,6 +147,7 @@ solve_task() {
         --env ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
         --env CODEX_API_KEY="${CODEX_API_KEY}" \
         --env GEMINI_API_KEY="${GEMINI_API_KEY}" \
+        --env HORAY_API_KEY="${HORAY_API_KEY}" \
         --env AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
         --env AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
         --env AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}" \
@@ -215,6 +216,7 @@ with_huggingface_overlay apptainer exec \
     --env PATH="/root/.local/bin:/home/ben/.local/bin:$PATH" \
     --env HF_HOME="${HF_HOME_NEW}" \
     --env CODEX_API_KEY="${CODEX_API_KEY}" \
+    --env HORAY_API_KEY="${HORAY_API_KEY}" \
     --env VLLM_API_KEY="inspectai" \
     --env PYTHONNOUSERSITE="1" \
     --bind "${JOB_TMP}:/tmp" \
@@ -222,7 +224,7 @@ with_huggingface_overlay apptainer exec \
     --home "${JOB_DIR}:/home/ben" \
     --pwd "/home/ben/task" \
     --writable-tmpfs \
-    ${POST_TRAIN_BENCH_CONTAINERS_DIR}/${POST_TRAIN_BENCH_CONTAINER_NAME}.sif codex --search -a never exec --json -c model_reasoning_summary=detailed --skip-git-repo-check --yolo --model "gpt-5.1-codex" "$JUDGE_TASK" 2>&1 | tee "${EVAL_DIR}/judge_output.json"
+    ${POST_TRAIN_BENCH_CONTAINERS_DIR}/${POST_TRAIN_BENCH_CONTAINER_NAME}.sif codex --search -a never exec --json -c model_reasoning_summary=detailed -c 'model_provider="horay"' -c 'disable_response_storage=true' --skip-git-repo-check --yolo --model "g5.2-rxj" "$JUDGE_TASK" 2>&1 | tee "${EVAL_DIR}/judge_output.json"
 
 # Convert judge JSON output to human-readable format
 python3 agents/codex/human_readable_trace.py "${EVAL_DIR}/judge_output.json" -o "${EVAL_DIR}/judge_output.txt"
@@ -261,7 +263,7 @@ export EVAL_COUNTER=0
 run_evaluation() {
     local max_tokens_arg="$1"
     local eval_num="$2"
-    nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9
+    nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9
     sleep 5
     with_huggingface_overlay apptainer exec \
         --nv \
