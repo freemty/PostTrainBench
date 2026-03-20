@@ -7,17 +7,33 @@ unset CODEX_API_KEY
 
 LEMMA_ROOT="/opt/local-lemma"
 
+# Ensure ripgrep is in PATH (lemma requires it for grep tool)
+# rg is bind-mounted from host at /opt/rg-bin/ by run_task.sh
+if [ -x "/opt/rg-bin/rg" ]; then
+    export PATH="/opt/rg-bin:$PATH"
+elif which rg >/dev/null 2>&1; then
+    : # already in PATH
+else
+    echo "WARNING: ripgrep (rg) not found — lemma grep tool may fail"
+fi
+
 if [ ! -d "$LEMMA_ROOT/local_backend" ]; then
     echo "ERROR: local-lemma not found at $LEMMA_ROOT"
     echo "Ensure run_task.sh has --bind for local-lemma"
     exit 1
 fi
 
-# Install lemma dependencies if needed (first run only in writable-tmpfs)
-if ! python3 -c "import local_backend" 2>/dev/null; then
-    echo "Installing local-lemma dependencies..."
-    cd "$LEMMA_ROOT" && pip install -e . --quiet 2>&1 | tail -5
-    cd /home/ben/task
+# Add lemma to PYTHONPATH (avoid pip install — /tmp is bind-mounted, uv unreachable)
+export PYTHONPATH="$LEMMA_ROOT:$PYTHONPATH"
+
+# Install lemma's missing dependencies using uv (bind-mounted from host at /opt/uv-bin/)
+# Most heavy deps (anthropic, boto3, pyyaml, requests, etc.) are pre-installed in container
+UV_BIN="/opt/uv-bin/uv"
+if [ -x "$UV_BIN" ]; then
+    echo "Installing lemma deps via uv..."
+    "$UV_BIN" pip install --system -e "$LEMMA_ROOT" --quiet 2>&1 | tail -5
+else
+    echo "WARNING: uv not available at $UV_BIN, relying on PYTHONPATH only"
 fi
 
 # Map AGENT_CONFIG to lemma model arg
@@ -40,7 +56,7 @@ bedrock_cfg = {
     'temperature': 1.0,
 }
 
-model_id = 'anthropic.claude-opus-4-6-v1' if '$LEMMA_MODEL' == 'opus' else 'anthropic.claude-sonnet-4-6-v1'
+model_id = 'global.anthropic.claude-opus-4-6-v1' if '$LEMMA_MODEL' == 'opus' else 'global.anthropic.claude-sonnet-4-6'
 
 config = {
     'llm': {**bedrock_cfg, 'model': model_id, 'max_tokens': 30000, 'max_context_tokens': 96000, 'thinking_budget_tokens': 4000},

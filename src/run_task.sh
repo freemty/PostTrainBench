@@ -103,6 +103,17 @@ if [ "$AGENT" = "lemma" ]; then
         exit 1
     fi
     export LOCAL_LEMMA_BIND
+    # Find uv binary on host for installing lemma deps inside container
+    # Container's /tmp is bind-mounted so the original uv at /tmp/tmp.*/uv is hidden
+    UV_HOST_BIN=$(find /tmp -maxdepth 2 -name uv -type f -executable 2>/dev/null | head -1)
+    if [ -n "$UV_HOST_BIN" ]; then
+        export UV_HOST_DIR="$(dirname "$UV_HOST_BIN")"
+    fi
+    # Find ripgrep on host (lemma requires it for grep tool)
+    RG_HOST_BIN=$(which rg 2>/dev/null)
+    if [ -n "$RG_HOST_BIN" ]; then
+        export RG_HOST_DIR="$(dirname "$RG_HOST_BIN")"
+    fi
 fi
 
 # Copy scripts needed inside the container
@@ -177,6 +188,8 @@ solve_task() {
         --bind "${JOB_TMP}:/tmp" \
         --bind "${HF_MERGED}:${HF_HOME_NEW}" \
         ${LOCAL_LEMMA_BIND:+--bind "${LOCAL_LEMMA_BIND}:/opt/local-lemma"} \
+        ${UV_HOST_DIR:+--bind "${UV_HOST_DIR}:/opt/uv-bin"} \
+        ${RG_HOST_DIR:+--bind "${RG_HOST_DIR}:/opt/rg-bin"} \
         --home "${JOB_DIR}:/home/ben" \
         --pwd "/home/ben/task" \
         --writable-tmpfs \
