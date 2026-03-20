@@ -94,6 +94,17 @@ if [ "$EVALUATION_TASK" == "arenahardwriting" ] || [ "$EVALUATION_TASK" == "heal
     export OPENAI_API_KEY="${CODEX_API_KEY}"
 fi
 
+# Auto-detect local-lemma for bind-mount (lemma agent needs this)
+if [ "$AGENT" = "lemma" ]; then
+    LOCAL_LEMMA_BIND="${LOCAL_LEMMA_PATH:-$(dirname "$(pwd)")/local-lemma}"
+    if [ ! -d "$LOCAL_LEMMA_BIND/local_backend" ]; then
+        echo "ERROR: lemma agent requires local-lemma at $LOCAL_LEMMA_BIND"
+        echo "Set LOCAL_LEMMA_PATH or place local-lemma next to PostTrainBench"
+        exit 1
+    fi
+    export LOCAL_LEMMA_BIND
+fi
+
 # Copy scripts needed inside the container
 cp src/utils/check_cuda.py "${JOB_DIR}/check_cuda.py"
 cp src/utils/check_cuda_writing.py "${JOB_DIR}/check_cuda_writing.py"
@@ -161,8 +172,11 @@ solve_task() {
         --env PROMPT="${PROMPT}" \
         --env AGENT_CONFIG="${AGENT_CONFIG}" \
         --env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+        --env LEMMA_MAAS_BASE_URL="${LEMMA_MAAS_BASE_URL:-}" \
+        --env LEMMA_MAAS_API_KEY="${LEMMA_MAAS_API_KEY:-}" \
         --bind "${JOB_TMP}:/tmp" \
         --bind "${HF_MERGED}:${HF_HOME_NEW}" \
+        ${LOCAL_LEMMA_BIND:+--bind "${LOCAL_LEMMA_BIND}:/opt/local-lemma"} \
         --home "${JOB_DIR}:/home/ben" \
         --pwd "/home/ben/task" \
         --writable-tmpfs \
