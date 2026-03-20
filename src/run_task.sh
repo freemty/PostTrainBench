@@ -76,6 +76,11 @@ if [ -d "$HOME/.claude" ]; then
     cp "$HOME/.claude/settings.json" "${JOB_DIR}/.claude/" 2>/dev/null
 fi
 
+# Copy agent home overlay (skills, agents, CLAUDE.md, etc.)
+if [ -d "agents/${AGENT}/home" ]; then
+    cp -r "agents/${AGENT}/home/." "${JOB_DIR}/"
+fi
+
 BENCHMARK=$(cat src/eval/tasks/${EVALUATION_TASK}/benchmark.txt)
 PROMPT=$(python3 src/eval/general/get_prompt.py --model-to-train "$MODEL_TO_TRAIN" --benchmark-id "$EVALUATION_TASK" --num-hours "$NUM_HOURS" --agent "${AGENT}")
 echo "$PROMPT" > "${EVAL_DIR}/prompt.txt"

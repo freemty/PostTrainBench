@@ -45,6 +45,24 @@ run_test "${SCRIPT_DIR}/test_host_env.sh" "1. Host Environment"
 run_test "${SCRIPT_DIR}/test_container_env.sh" "2. Container Environment"
 run_test "${SCRIPT_DIR}/test_eval_pipeline.sh" "3. Evaluation Pipeline"
 
+# Run agent env check for all agents that have a manifest
+echo ""
+echo "================================================================"
+echo "  3b. Agent Environment Verification"
+echo "================================================================"
+AGENT_ENV_CHECKED=0
+for agent_dir in agents/*/; do
+    agent_name=$(basename "$agent_dir")
+    if [ -f "${agent_dir}/manifest.json" ]; then
+        echo "  Checking agent: ${agent_name}"
+        bash tests/test_agent_env.sh "$agent_name" --local 2>&1 | grep -E '^\s+\[(PASS|FAIL|WARN|SKIP)\]'
+        AGENT_ENV_CHECKED=$((AGENT_ENV_CHECKED + 1))
+    fi
+done
+if [ $AGENT_ENV_CHECKED -eq 0 ]; then
+    echo "  (no agents with manifest.json found)"
+fi
+
 if [ "$SKIP_API" = false ]; then
     run_test "${SCRIPT_DIR}/test_bedrock_connectivity.sh" "4. Agent API (Bedrock)"
 else

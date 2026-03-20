@@ -1,0 +1,13 @@
+{
+  "required_files": [
+    "/home/ben/CLAUDE.md",
+    "/home/ben/agent_solve.sh",
+    "/home/ben/task/evaluate.py",
+    "/home/ben/task/timer.sh"
+  ],
+  "required_strings": {
+    "/home/ben/CLAUDE.md": ["Process Rules", "Meta Rules", "plan.md", "results.md"]
+  },
+  "forbidden_files": [],
+  "required_cli": ["claude"]
+}
