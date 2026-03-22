@@ -44,6 +44,7 @@ echo "============================================"
 run_test "${SCRIPT_DIR}/test_host_env.sh" "1. Host Environment"
 run_test "${SCRIPT_DIR}/test_container_env.sh" "2. Container Environment"
 run_test "${SCRIPT_DIR}/test_eval_pipeline.sh" "3. Evaluation Pipeline"
+run_test "${SCRIPT_DIR}/test_network.sh" "4. Network & Cache Completeness"
 
 # Run agent env check for all agents that have a manifest
 echo ""
