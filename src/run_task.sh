@@ -328,8 +328,16 @@ export EVAL_COUNTER=0
 run_evaluation() {
     local max_tokens_arg="$1"
     local eval_num="$2"
-    nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9
-    sleep 5
+    # Kill ALL GPU processes on our device (training may have leaked to other contexts)
+    nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 2>/dev/null || true
+    # Also kill any python/vllm processes owned by current user (catches leaked processes)
+    pgrep -u "$(id -u)" -f "vllm|torch|transformers" | xargs -r kill -9 2>/dev/null || true
+    # Wait for GPU memory to actually free
+    for _wait in $(seq 1 10); do
+        GPU_USED=$(nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)
+        [ "${GPU_USED:-99999}" -lt 500 ] && break
+        sleep 2
+    done
     with_huggingface_overlay apptainer exec \
         --nv \
         --env "HF_HOME=${TMP_HF_CACHE}" \
