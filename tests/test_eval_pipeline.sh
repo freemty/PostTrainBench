@@ -176,7 +176,7 @@ MODELS_TESTED=0
 for MODEL_ID in "${EXPERIMENT_MODELS[@]}"; do
     # Convert HF model ID to cache directory name
     # e.g. "Qwen/Qwen3-4B-Base" -> "models--Qwen--Qwen3-4B-Base"
-    CACHE_DIR_NAME="models--$(echo "$MODEL_ID" | tr '/' '--')"
+    CACHE_DIR_NAME="models--$(echo "$MODEL_ID" | sed 's|/|--|g')"
     SNAPSHOT_DIR=""
 
     if [ -d "${HF_HOME}/hub/${CACHE_DIR_NAME}/snapshots" ]; then

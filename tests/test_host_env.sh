@@ -40,9 +40,10 @@ echo ""
 echo "--- 1b. GPU ---"
 
 if nvidia-smi >/dev/null 2>&1; then
+    # Use awk instead of head -1 to avoid SIGPIPE on multi-GPU machines (8 GPUs = 8 lines)
     GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | wc -l | tr -d ' ')
-    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
-    GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | xargs)
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | awk 'NR==1{print; exit}' | xargs)
+    GPU_MEM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | awk 'NR==1{print; exit}' | xargs)
     pass "GPU detected: ${GPU_COUNT}x ${GPU_NAME} (${GPU_MEM} MiB each)"
 
     if [ "${GPU_MEM:-0}" -ge 20000 ]; then
