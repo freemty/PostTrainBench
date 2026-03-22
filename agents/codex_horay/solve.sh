@@ -11,6 +11,7 @@ unset OPENAI_API_KEY
 export VLLM_API_KEY="${VLLM_API_KEY:-inspectai}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_HOME="${HF_HOME:-/home/ben/hf_cache}"
+export UV_INDEX_URL="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 
 # Gemini models need chat completions API (responses API returns 502)
 if [[ "$AGENT_CONFIG" == ge* ]]; then

@@ -9,6 +9,7 @@ unset CODEX_API_KEY
 export VLLM_API_KEY="${VLLM_API_KEY:-inspectai}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_HOME="${HF_HOME:-/home/ben/hf_cache}"
+export UV_INDEX_URL="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
 
 LEMMA_ROOT="/opt/local-lemma"
 
