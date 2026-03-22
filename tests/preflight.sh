@@ -72,6 +72,15 @@ else
     echo "================================================================"
 fi
 
+if [ "$SKIP_API" = false ]; then
+    run_test "${SCRIPT_DIR}/test_horay_connectivity.sh" "5. Agent API (Horay)"
+else
+    echo ""
+    echo "================================================================"
+    echo "  5. Agent API (Horay) — SKIPPED (--skip-api)"
+    echo "================================================================"
+fi
+
 echo ""
 echo "============================================"
 echo "  Preflight Summary"
