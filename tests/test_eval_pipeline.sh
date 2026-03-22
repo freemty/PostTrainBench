@@ -160,55 +160,58 @@ else
 fi
 
 echo ""
-echo "--- 3f. vLLM Serve Smoke Test ---"
-# Try to start vLLM with a real model for a few seconds.
-# This catches the exact error we hit: OSError on local path.
+echo "--- 3f. vLLM Serve Smoke Test (per-model) ---"
+# Test all 4 experiment models explicitly.
+# This catches model-specific vLLM failures (e.g. SmolLM3-3B crash in exp01a).
 
-# Find a model to test with
-if [ -n "$MODEL_PATH" ] && [ -d "$MODEL_PATH" ]; then
-    TEST_MODEL="$MODEL_PATH"
-elif [ -d "${FAKE_EVAL_DIR:-/nonexistent}/final_model" ]; then
-    TEST_MODEL="${FAKE_EVAL_DIR}/final_model"
-else
-    # Try to find a small cached model in HF cache
-    TEST_MODEL=""
-    if [ -d "${HF_HOME}/hub" ]; then
-        for snapshot_dir in "${HF_HOME}/hub"/models--*/snapshots/*/; do
-            if [ -f "${snapshot_dir}/config.json" ] && [ -f "${snapshot_dir}/tokenizer.json" ]; then
-                # Check it's a small model (< 5GB safetensors)
-                TOTAL_SIZE=$(find "$snapshot_dir" -name "*.safetensors" -exec du -cb {} + 2>/dev/null | tail -1 | cut -f1)
-                if [ "${TOTAL_SIZE:-0}" -gt 0 ] && [ "${TOTAL_SIZE:-0}" -lt 5368709120 ]; then
-                    # Remove trailing slash (vLLM 0.11.0 treats paths with trailing / as repo IDs)
-                    TEST_MODEL="${snapshot_dir%/}"
-                    break
-                fi
+EXPERIMENT_MODELS=(
+    "Qwen/Qwen3-4B-Base"
+    "google/gemma-3-4b-pt"
+    "Qwen/Qwen3-1.7B-Base"
+    "HuggingFaceTB/SmolLM3-3B-Base"
+)
+
+MODELS_TESTED=0
+
+for MODEL_ID in "${EXPERIMENT_MODELS[@]}"; do
+    # Convert HF model ID to cache directory name
+    # e.g. "Qwen/Qwen3-4B-Base" -> "models--Qwen--Qwen3-4B-Base"
+    CACHE_DIR_NAME="models--$(echo "$MODEL_ID" | tr '/' '--')"
+    SNAPSHOT_DIR=""
+
+    if [ -d "${HF_HOME}/hub/${CACHE_DIR_NAME}/snapshots" ]; then
+        for snap in "${HF_HOME}/hub/${CACHE_DIR_NAME}/snapshots"/*/; do
+            if [ -f "${snap}/config.json" ]; then
+                # Remove trailing slash (vLLM 0.11.0 treats paths with trailing / as repo IDs)
+                SNAPSHOT_DIR="${snap%/}"
+                break
             fi
         done
     fi
-fi
 
-if [ -z "$TEST_MODEL" ]; then
-    skip "No model available for vLLM serve test (pass a model path as argument)"
-else
-    echo "  Testing with model: $TEST_MODEL"
+    if [ -z "$SNAPSHOT_DIR" ]; then
+        skip "vLLM smoke test for ${MODEL_ID}: not cached in HF_HOME"
+        continue
+    fi
 
-    # Prepare bind mounts (model might be on external storage)
+    echo "  Testing with model: ${MODEL_ID} (${SNAPSHOT_DIR})"
+    MODELS_TESTED=$((MODELS_TESTED + 1))
+
+    # Prepare bind mounts (model may be on external storage)
     BIND_ARGS="--bind ${REPO_ROOT}:${REPO_ROOT}"
-    # Add model path bind if it's outside REPO_ROOT
-    case "$TEST_MODEL" in
+    case "$SNAPSHOT_DIR" in
         ${REPO_ROOT}/*) ;;
-        *) BIND_ARGS="${BIND_ARGS} --bind $(dirname ${TEST_MODEL}):$(dirname ${TEST_MODEL})" ;;
+        *) BIND_ARGS="${BIND_ARGS} --bind $(dirname "${SNAPSHOT_DIR}"):$(dirname "${SNAPSHOT_DIR}")" ;;
     esac
 
-    # Start vLLM serve, wait a few seconds, check if it's alive
-    VLLM_LOG="${PTB_TMP_BASE}/preflight_vllm_$$"
+    VLLM_LOG="${PTB_TMP_BASE}/preflight_vllm_${MODEL_ID//\//_}_$$"
     mkdir -p "$(dirname "$VLLM_LOG")"
 
-    timeout 30s apptainer exec --nv --writable-tmpfs \
+    timeout 45s apptainer exec --nv --writable-tmpfs \
         $BIND_ARGS \
         --pwd "${REPO_ROOT}/src/eval/tasks/gsm8k" \
         "$CONTAINER" \
-        vllm serve "$TEST_MODEL" \
+        vllm serve "$SNAPSHOT_DIR" \
             --host 0.0.0.0 --port 48199 \
             --api-key inspectai \
             --gpu-memory-utilization 0.3 \
@@ -216,10 +219,10 @@ else
         > "$VLLM_LOG" 2>&1 &
     VLLM_PID=$!
 
-    # Wait for startup or failure
+    # Wait for startup or failure (up to 45s: 15 iterations × 3s)
     VLLM_STARTED=false
     for i in $(seq 1 15); do
-        sleep 2
+        sleep 3
         if ! kill -0 $VLLM_PID 2>/dev/null; then
             # Process died
             break
@@ -235,25 +238,28 @@ else
     done
 
     if $VLLM_STARTED; then
-        pass "vLLM serve started successfully"
+        pass "vLLM serve OK: ${MODEL_ID}"
     else
         VLLM_ERR=$(grep -i "error\|exception\|traceback\|OSError" "$VLLM_LOG" 2>/dev/null | tail -3)
         if [ -n "$VLLM_ERR" ]; then
-            fail "vLLM serve crashed: $VLLM_ERR"
+            fail "vLLM serve crashed for ${MODEL_ID}: $VLLM_ERR"
         elif kill -0 $VLLM_PID 2>/dev/null; then
-            warn "vLLM serve still loading after 30s (may be OK for large models)"
+            warn "vLLM serve still loading after 45s for ${MODEL_ID} (may be OK for large models)"
         else
-            fail "vLLM serve exited (check $VLLM_LOG)"
+            fail "vLLM serve exited unexpectedly for ${MODEL_ID} (check $VLLM_LOG)"
         fi
     fi
 
-    # Cleanup
+    # Cleanup between models: kill vLLM process and free GPU
     kill $VLLM_PID 2>/dev/null || true
     wait $VLLM_PID 2>/dev/null || true
-    # Kill any leftover GPU processes from this test
     nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | xargs -r kill -9 2>/dev/null || true
     sleep 2
     rm -f "$VLLM_LOG"
+done
+
+if [ "$MODELS_TESTED" -eq 0 ]; then
+    warn "vLLM smoke test: no experiment models found in HF cache — skipped all 4 models"
 fi
 
 echo ""
