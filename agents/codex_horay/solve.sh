@@ -14,10 +14,11 @@ else
     HORAY_PROVIDER="horay"
 fi
 
-codex exec --full-auto --json \
+# exp01b original command — --search before exec enables multi-turn autonomous mode
+codex --search exec --json \
   -c model_reasoning_summary=detailed \
   -c "model_provider=\"${HORAY_PROVIDER}\"" \
   -c "disable_response_storage=true" \
-  --skip-git-repo-check \
+  --skip-git-repo-check --yolo \
   --model "$AGENT_CONFIG" \
   "$PROMPT"

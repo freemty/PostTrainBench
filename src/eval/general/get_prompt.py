@@ -40,24 +40,9 @@ def main():
 
     datetime = subprocess.run(['date', '-u'], capture_output=True, text=True).stdout.strip()
 
-    # Collect key package versions from container for agent awareness
+    # Disabled: version injection caused codex to plan instead of execute (exp02a regression)
+    # TODO: re-enable after fixing — must run INSIDE container, not on host
     env_versions = ""
-    try:
-        import importlib
-        key_packages = ["transformers", "trl", "peft", "vllm", "torch", "datasets", "accelerate"]
-        versions = []
-        for pkg in key_packages:
-            try:
-                mod = importlib.import_module(pkg)
-                ver = getattr(mod, "__version__", "unknown")
-                versions.append(f"{pkg}=={ver}")
-            except ImportError:
-                pass
-        if versions:
-            env_versions = "- Installed package versions: " + ", ".join(versions) + "\n"
-            env_versions += "- NOTE: transformers >= 4.46 renamed `evaluation_strategy` to `eval_strategy`. Use `eval_strategy` in TrainingArguments.\n"
-    except Exception:
-        pass
 
     result = template.replace('{model}', args.model_to_train)
     result = result.replace('{benchmark}', benchmark_name)
