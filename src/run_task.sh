@@ -193,6 +193,9 @@ solve_task() {
         --env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
         --env LEMMA_MAAS_BASE_URL="${LEMMA_MAAS_BASE_URL:-}" \
         --env LEMMA_MAAS_API_KEY="${LEMMA_MAAS_API_KEY:-}" \
+        --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+        --env HF_TOKEN="${HF_TOKEN:-}" \
+        --env UV_INDEX_URL="${UV_INDEX_URL:-}" \
         --bind "${JOB_TMP}:/tmp" \
         --bind "${HF_MERGED}:${HF_HOME_NEW}" \
         ${LOCAL_LEMMA_BIND:+--bind "${LOCAL_LEMMA_BIND}:/opt/local-lemma"} \
@@ -274,6 +277,8 @@ with_huggingface_overlay apptainer exec \
     --env HORAY_API_KEY="${HORAY_API_KEY}" \
     --env VLLM_API_KEY="inspectai" \
     --env PYTHONNOUSERSITE="1" \
+    --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+    --env HF_TOKEN="${HF_TOKEN:-}" \
     --bind "${JOB_TMP}:/tmp" \
     --bind "${HF_MERGED}:${HF_HOME_NEW}" \
     --home "${JOB_DIR}:/home/ben" \
@@ -335,6 +340,8 @@ run_evaluation() {
         --env OPENAI_API_KEY="${OPENAI_API_KEY}" \
         --env VLLM_API_KEY="inspectai" \
         --env PYTHONNOUSERSITE="1" \
+        --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+        --env HF_TOKEN="${HF_TOKEN:-}" \
         --writable-tmpfs \
         --bind "${REPO_ROOT}:${REPO_ROOT}" \
         --bind "${HF_MERGED}:${TMP_HF_CACHE}" \
