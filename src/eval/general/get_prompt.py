@@ -40,6 +40,25 @@ def main():
 
     datetime = subprocess.run(['date', '-u'], capture_output=True, text=True).stdout.strip()
 
+    # Collect key package versions from container for agent awareness
+    env_versions = ""
+    try:
+        import importlib
+        key_packages = ["transformers", "trl", "peft", "vllm", "torch", "datasets", "accelerate"]
+        versions = []
+        for pkg in key_packages:
+            try:
+                mod = importlib.import_module(pkg)
+                ver = getattr(mod, "__version__", "unknown")
+                versions.append(f"{pkg}=={ver}")
+            except ImportError:
+                pass
+        if versions:
+            env_versions = "- Installed package versions: " + ", ".join(versions) + "\n"
+            env_versions += "- NOTE: transformers >= 4.46 renamed `evaluation_strategy` to `eval_strategy`. Use `eval_strategy` in TrainingArguments.\n"
+    except Exception:
+        pass
+
     result = template.replace('{model}', args.model_to_train)
     result = result.replace('{benchmark}', benchmark_name)
     result = result.replace('{num_hours}', args.num_hours)
@@ -49,6 +68,7 @@ def main():
     else:
         result = result.replace('{setup_other}', "")
 
+    result = result.replace('{env_versions}', env_versions)
     result = result.replace('{datetime}', datetime)
 
     if args.agent == 'claude':
