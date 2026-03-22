@@ -48,7 +48,9 @@ export TMP_SUBDIR="${PTB_TMP_BASE}/posttrain_container_${EVALUATION_TASK}_${RESU
 
 JOB_DIR="${TMP_SUBDIR}/job_dir"
 JOB_TMP="${TMP_SUBDIR}/tmp"
-export HF_MERGED="${TMP_SUBDIR}/merged_huggingface"
+# Direct bind-mount: no overlay, share HF cache read-write
+# (Hive pattern: overlay COW caused 38TB disk explosion + weight corruption in exp01b)
+export HF_MERGED="${HF_HOME}"
 
 mkdir -p "${JOB_DIR}"
 mkdir -p "${JOB_TMP}"
@@ -130,21 +132,10 @@ if [ -f "agents/${AGENT}/oauth_token" ]; then
 fi
 
 # Utils
+# No-op overlay wrapper: HF_MERGED already points to HF_HOME (direct bind-mount).
+# Kept as wrapper so solve_task/run_evaluation call sites don't change.
 with_huggingface_overlay() {
-    mkdir -p "$TMP_SUBDIR/merged_huggingface"
-    mkdir -p "$TMP_SUBDIR/upper_huggingface"
-    mkdir -p "$TMP_SUBDIR/fuse_workdir"
-    fuse-overlayfs -o "lowerdir=$HF_HOME,upperdir=$TMP_SUBDIR/upper_huggingface,workdir=$TMP_SUBDIR/fuse_workdir" "$TMP_SUBDIR/merged_huggingface"
-    
     "$@"
-    local exit_code=$?
-    
-    fusermount -u "$TMP_SUBDIR/merged_huggingface"
-    rm -r "$TMP_SUBDIR/merged_huggingface"
-    rm -r "$TMP_SUBDIR/upper_huggingface"
-    rm -r "$TMP_SUBDIR/fuse_workdir"
-    
-    return $exit_code
 }
 
 with_record_the_time() {
@@ -330,8 +321,8 @@ run_evaluation() {
     local eval_num="$2"
     # Kill ALL GPU processes on our device (training may have leaked to other contexts)
     nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 2>/dev/null || true
-    # Also kill any python/vllm processes owned by current user (catches leaked processes)
-    pgrep -u "$(id -u)" -f "vllm|torch|transformers" | xargs -r kill -9 2>/dev/null || true
+    # Kill leaked vLLM server processes (scoped to avoid killing the running agent)
+    pgrep -u "$(id -u)" -f "vllm serve|vllm.entrypoints" | grep -v "^$$" | xargs -r kill -9 2>/dev/null || true
     # Wait for GPU memory to actually free
     for _wait in $(seq 1 10); do
         GPU_USED=$(nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1)

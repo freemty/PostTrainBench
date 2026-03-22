@@ -207,12 +207,14 @@ for MODEL_ID in "${EXPERIMENT_MODELS[@]}"; do
     VLLM_LOG="${PTB_TMP_BASE}/preflight_vllm_${MODEL_ID//\//_}_$$"
     mkdir -p "$(dirname "$VLLM_LOG")"
 
+    # Use a different port per model to avoid TCP TIME_WAIT conflicts
+    VLLM_PORT=$((48199 + MODELS_TESTED - 1))
     timeout 45s apptainer exec --nv --writable-tmpfs \
         $BIND_ARGS \
         --pwd "${REPO_ROOT}/src/eval/tasks/gsm8k" \
         "$CONTAINER" \
         vllm serve "$SNAPSHOT_DIR" \
-            --host 0.0.0.0 --port 48199 \
+            --host 0.0.0.0 --port "$VLLM_PORT" \
             --api-key inspectai \
             --gpu-memory-utilization 0.3 \
             --max-model-len 512 \
