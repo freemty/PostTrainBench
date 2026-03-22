@@ -273,9 +273,9 @@ network_probe() {
     local deps_file="${REPO_ROOT}/src/eval/tasks/${task}/dataset_deps.json"
     if [ -f "$deps_file" ]; then
         local dataset_id is_local revision
-        read -r dataset_id is_local revision < <(python3 -c "
+        IFS='|' read -r dataset_id is_local revision < <(python3 -c "
 import json; d=json.load(open('${deps_file}'))
-print(d.get('dataset_id') or '', d.get('local', False), d.get('revision') or '')
+print('|'.join([d.get('dataset_id') or '', str(d.get('local', False)), d.get('revision') or '']))
 ")
 
         if [ "$is_local" = "True" ]; then

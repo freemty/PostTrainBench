@@ -90,7 +90,7 @@ if [ ${#MODELS[@]} -eq 0 ] && [ ${#TASKS[@]} -eq 0 ]; then
     skip "No --model or --task specified, skipping cache check"
 fi
 
-for model in "${MODELS[@]}"; do
+for model in ${MODELS[@]+"${MODELS[@]}"}; do
     model_org=$(echo "$model" | cut -d'/' -f1)
     model_name=$(echo "$model" | cut -d'/' -f2)
     cache_dir="${HF_HOME}/hub/models--${model_org}--${model_name}"
@@ -111,16 +111,16 @@ for model in "${MODELS[@]}"; do
     fi
 done
 
-for task in "${TASKS[@]}"; do
+for task in ${TASKS[@]+"${TASKS[@]}"}; do
     deps_file="${REPO_ROOT}/src/eval/tasks/${task}/dataset_deps.json"
     if [ ! -f "$deps_file" ]; then
         warn "No dataset_deps.json for task: ${task}"
         continue
     fi
 
-    read -r dataset_id is_local revision < <(python3 -c "
+    IFS='|' read -r dataset_id is_local revision < <(python3 -c "
 import json; d=json.load(open('${deps_file}'))
-print(d.get('dataset_id') or '', d.get('local', False), d.get('revision') or '')
+print('|'.join([d.get('dataset_id') or '', str(d.get('local', False)), d.get('revision') or '']))
 ")
 
     if [ "$is_local" = "True" ]; then
