@@ -85,6 +85,7 @@ def _download_dataset(entry: dict, index: int, total: int, dry_run: bool) -> Tup
     dataset_name = entry['dataset']
     configs = entry.get('configs', [entry.get('config', 'default')])
     splits = entry.get('splits', [])
+    revision = entry.get('revision')
 
     # Check if already cached
     repo_folder = _repo_folder('datasets', dataset_name)
@@ -104,10 +105,11 @@ def _download_dataset(entry: dict, index: int, total: int, dry_run: bool) -> Tup
         label = f"{dataset_name} ({config})" if config else dataset_name
 
         if dry_run:
+            rev_tag = f" [revision={revision}]" if revision else ""
             if splits:
-                _safe_print(f"[{index}/{total}] Would download dataset: {label} [splits={splits}]")
+                _safe_print(f"[{index}/{total}] Would download dataset: {label} [splits={splits}]{rev_tag}")
             else:
-                _safe_print(f"[{index}/{total}] Would download dataset: {label}")
+                _safe_print(f"[{index}/{total}] Would download dataset: {label}{rev_tag}")
             continue
 
         if splits:
@@ -116,12 +118,16 @@ def _download_dataset(entry: dict, index: int, total: int, dry_run: bool) -> Tup
                 kwargs = {'split': split}
                 if config and config != 'default':
                     kwargs['name'] = config
+                if revision:
+                    kwargs['revision'] = revision
                 load_dataset(dataset_name, **kwargs)
         else:
             _safe_print(f"[{index}/{total}] Downloading dataset: {label}...")
             kwargs = {}
             if config and config != 'default':
                 kwargs['name'] = config
+            if revision:
+                kwargs['revision'] = revision
             load_dataset(dataset_name, **kwargs)
 
     if not dry_run:
