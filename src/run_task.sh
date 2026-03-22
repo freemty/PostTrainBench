@@ -7,6 +7,13 @@ CLUSTER_ID="$4"
 NUM_HOURS="$5"
 AGENT_CONFIG="$6"
 
+SKIP_NETWORK_PROBE=false
+for arg in "${@:7}"; do
+    case "$arg" in
+        --skip-network-probe) SKIP_NETWORK_PROBE=true ;;
+    esac
+done
+
 source src/commit_utils/set_env_vars.sh
 
 # --- Quick sanity checks (fail fast before allocating resources) ---
@@ -172,6 +179,153 @@ solve_and_persist() {
     return $solve_exit
 }
 
+# --- Network probe (runs on HOST, not inside container) ---
+# Detects HF/PyPI mirrors, validates cache, sets env vars for container passthrough.
+# Depends on globals: REPO_ROOT, EVAL_DIR, HF_HOME
+network_probe() {
+    local task="$1"
+    local model="$2"
+
+    echo "=== NETWORK PROBE ==="
+
+    # 1. HF endpoint selection
+    local hf_unreachable=false
+    if [ -n "${HF_ENDPOINT:-}" ]; then
+        local hf_speed
+        hf_speed=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "${HF_ENDPOINT}/api/models" 2>/dev/null || echo "0")
+        hf_speed="${hf_speed//[^0-9.]/}"
+        if awk "BEGIN{exit(${hf_speed:-0} > 1000 ? 0 : 1)}"; then
+            echo "  [INFO] HF_ENDPOINT=${HF_ENDPOINT} reachable (${hf_speed} B/s)"
+        else
+            echo "  [WARN] HF_ENDPOINT=${HF_ENDPOINT} unreachable, probing alternatives..."
+            unset HF_ENDPOINT
+        fi
+    fi
+
+    if [ -z "${HF_ENDPOINT:-}" ]; then
+        local speed_mirror speed_direct
+        speed_mirror=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "https://hf-mirror.com/api/models" 2>/dev/null || echo "0")
+        speed_mirror="${speed_mirror//[^0-9.]/}"
+        speed_direct=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "https://huggingface.co/api/models" 2>/dev/null || echo "0")
+        speed_direct="${speed_direct//[^0-9.]/}"
+
+        local max_speed
+        max_speed=$(awk "BEGIN{print (${speed_mirror:-0} > ${speed_direct:-0}) ? ${speed_mirror:-0} : ${speed_direct:-0}}")
+        if awk "BEGIN{exit(${max_speed:-0} > 1000 ? 0 : 1)}"; then
+            if awk "BEGIN{exit(${speed_mirror:-0} >= ${speed_direct:-0} ? 0 : 1)}"; then
+                export HF_ENDPOINT="https://hf-mirror.com"
+            else
+                export HF_ENDPOINT="https://huggingface.co"
+            fi
+            echo "  [INFO] Auto-selected HF_ENDPOINT=${HF_ENDPOINT}"
+        else
+            hf_unreachable=true
+            echo "  [WARN] Both hf-mirror.com and huggingface.co unreachable"
+        fi
+    fi
+
+    # 2. PyPI mirror selection
+    if [ -z "${UV_INDEX_URL:-}" ]; then
+        local speed_aliyun speed_pypi
+        speed_aliyun=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "https://mirrors.aliyun.com/pypi/simple/pip/" 2>/dev/null || echo "0")
+        speed_aliyun="${speed_aliyun//[^0-9.]/}"
+        speed_pypi=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "https://pypi.org/simple/pip/" 2>/dev/null || echo "0")
+        speed_pypi="${speed_pypi//[^0-9.]/}"
+
+        if awk "BEGIN{exit(${speed_aliyun:-0} >= ${speed_pypi:-0} ? 0 : 1)}" && \
+           awk "BEGIN{exit(${speed_aliyun:-0} > 1000 ? 0 : 1)}"; then
+            export UV_INDEX_URL="https://mirrors.aliyun.com/pypi/simple/"
+            echo "  [INFO] Auto-selected UV_INDEX_URL=${UV_INDEX_URL}"
+        elif awk "BEGIN{exit(${speed_pypi:-0} > 1000 ? 0 : 1)}"; then
+            echo "  [INFO] pypi.org reachable, using default"
+        fi
+    else
+        echo "  [INFO] UV_INDEX_URL=${UV_INDEX_URL} (from host)"
+    fi
+
+    # 3. Cache completeness check
+    local model_ok=true
+    local eval_ok=true
+    local cache_missing=()
+
+    # 3a. Model cache (check host $HF_HOME, which gets bind-mounted into container)
+    local model_org model_name model_cache_dir
+    model_org=$(echo "$model" | cut -d'/' -f1)
+    model_name=$(echo "$model" | cut -d'/' -f2)
+    model_cache_dir="${HF_HOME}/hub/models--${model_org}--${model_name}"
+    if [ -d "$model_cache_dir" ]; then
+        local safetensor_count
+        safetensor_count=$(find "$model_cache_dir" -name "*.safetensors" -size +0c 2>/dev/null | head -1 | wc -l)
+        if [ "$safetensor_count" -gt 0 ]; then
+            echo "  [PASS] Model cache: ${model_org}/${model_name}"
+        else
+            model_ok=false
+            cache_missing+=("model:${model}")
+            echo "  [FAIL] Model cache: ${model_org}/${model_name} — no valid safetensors"
+        fi
+    else
+        model_ok=false
+        cache_missing+=("model:${model}")
+        echo "  [FAIL] Model cache: ${model_org}/${model_name} — directory missing"
+    fi
+
+    # 3b. Eval dataset cache
+    local deps_file="${REPO_ROOT}/src/eval/tasks/${task}/dataset_deps.json"
+    if [ -f "$deps_file" ]; then
+        local dataset_id is_local revision
+        read -r dataset_id is_local revision < <(python3 -c "
+import json; d=json.load(open('${deps_file}'))
+print(d.get('dataset_id') or '', d.get('local', False), d.get('revision') or '')
+")
+
+        if [ "$is_local" = "True" ]; then
+            echo "  [SKIP] Eval dataset: local JSONL (${task})"
+        elif [ -n "$dataset_id" ]; then
+            local ds_org ds_name ds_cache_dir
+            ds_org=$(echo "$dataset_id" | cut -d'/' -f1)
+            ds_name=$(echo "$dataset_id" | cut -d'/' -f2)
+            ds_cache_dir="${HF_HOME}/datasets/${ds_org}--${ds_name}"
+
+            if [ -d "$ds_cache_dir" ]; then
+                if [ -n "$revision" ]; then
+                    local snap_dir="${ds_cache_dir}/snapshots/${revision}"
+                    if [ -d "$snap_dir" ]; then
+                        echo "  [PASS] Eval dataset: ${dataset_id} (revision ${revision:0:7})"
+                    else
+                        eval_ok=false
+                        cache_missing+=("dataset:${dataset_id}@${revision:0:7}")
+                        echo "  [FAIL] Eval dataset: ${dataset_id} — revision snapshot missing"
+                    fi
+                else
+                    echo "  [PASS] Eval dataset: ${dataset_id}"
+                fi
+            else
+                eval_ok=false
+                cache_missing+=("dataset:${dataset_id}")
+                echo "  [FAIL] Eval dataset: ${dataset_id} — directory missing"
+            fi
+        fi
+    else
+        echo "  [WARN] No dataset_deps.json for task: ${task}"
+    fi
+
+    # 4. Decision
+    if [ "$hf_unreachable" = true ]; then
+        if [ "$model_ok" = true ] && [ "$eval_ok" = true ]; then
+            echo "  [WARN] HF offline, but cache sufficient — continuing"
+        else
+            echo "  [FATAL] HF offline and cache incomplete: ${cache_missing[*]}"
+            echo "{\"status\":\"error\",\"error_type\":\"network_probe_failed\",\"error_message\":\"HF unreachable and cache missing: ${cache_missing[*]}\",\"timestamp\":\"$(date -Iseconds)\",\"hf_reachable\":false,\"cache_missing\":[$(printf '\"%s\",' "${cache_missing[@]}" | sed 's/,$//')]}" > "${EVAL_DIR}/status.json"
+            return 1
+        fi
+    else
+        echo "  [INFO] Network OK — HF reachable as fallback"
+    fi
+
+    echo "=== NETWORK PROBE DONE ==="
+    return 0
+}
+
 solve_task() {
     timeout --signal=TERM --kill-after=30s "$((NUM_HOURS * 60 + 5))m" \
     apptainer exec \
@@ -207,6 +361,15 @@ solve_task() {
         "${POST_TRAIN_BENCH_CONTAINERS_DIR}/${POST_TRAIN_BENCH_CONTAINER_NAME}.sif" \
         bash -c "python /home/ben/check_cuda.py && python /home/ben/check_cuda_writing.py && bash /home/ben/agent_solve.sh" > "${SOLVE_OUT}" 2>&1
 }
+
+export REPO_ROOT="$(pwd)"
+
+if [ "$SKIP_NETWORK_PROBE" = false ]; then
+    if ! network_probe "$EVALUATION_TASK" "$MODEL_TO_TRAIN"; then
+        echo "Network probe FAILED — aborting job"
+        exit 1
+    fi
+fi
 
 echo "================================"
 echo "========= RUNNING TASK ========="
