@@ -195,4 +195,35 @@ else
     warn "No HORAY_API_KEY (codex_horay agent won't work)"
 fi
 
+echo ""
+echo "--- 1i. Non-Interactive SSH Env Vars ---"
+# Simulate the exact command launch_fleet.sh uses: ssh <host> 'command'
+# This catches the ~/.bashrc [ -z "$PS1" ] && return guard
+
+NI_ENV=$(ssh localhost 'echo "AWS=${AWS_ACCESS_KEY_ID:+SET}" "HORAY=${HORAY_API_KEY:+SET}" "HF=${HF_HOME:+SET}"' 2>/dev/null) || NI_ENV="SSH_FAILED"
+
+if [ "$NI_ENV" = "SSH_FAILED" ]; then
+    skip "Cannot ssh to localhost (passwordless SSH not configured)"
+elif echo "$NI_ENV" | grep -q "AWS=SET"; then
+    pass "AWS_ACCESS_KEY_ID visible in non-interactive SSH"
+else
+    fail "AWS_ACCESS_KEY_ID NOT visible in non-interactive SSH (bashrc guard?)"
+fi
+if echo "$NI_ENV" | grep -q "HF=SET"; then
+    pass "HF_HOME visible in non-interactive SSH"
+elif [ "$NI_ENV" != "SSH_FAILED" ]; then
+    fail "HF_HOME NOT visible in non-interactive SSH"
+fi
+
+echo ""
+echo "--- 1j. Stale Overlay Mounts ---"
+# Check for leftover fuse-overlayfs mounts from previous experiments
+
+STALE_MOUNTS=$(mount 2>/dev/null | grep -c "fuse-overlayfs" || true)
+if [ "$STALE_MOUNTS" -eq 0 ]; then
+    pass "No stale fuse-overlayfs mounts"
+else
+    fail "$STALE_MOUNTS stale fuse-overlayfs mount(s) found — run: mount | grep fuse-overlayfs | awk '{print \$3}' | xargs -I{} fusermount -u {}"
+fi
+
 summary
