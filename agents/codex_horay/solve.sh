@@ -14,10 +14,10 @@ else
     HORAY_PROVIDER="horay"
 fi
 
-codex --search exec --json \
+codex exec --full-auto --json \
   -c model_reasoning_summary=detailed \
   -c "model_provider=\"${HORAY_PROVIDER}\"" \
   -c "disable_response_storage=true" \
-  --skip-git-repo-check --yolo \
+  --skip-git-repo-check \
   --model "$AGENT_CONFIG" \
   "$PROMPT"
