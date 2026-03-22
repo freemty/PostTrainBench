@@ -164,6 +164,23 @@ with_record_the_time() {
 
 SOLVE_OUT="${EVAL_DIR}/solve_out.txt"
 
+solve_and_persist() {
+    solve_task
+    local solve_exit=$?
+
+    # Copy final_model NOW while overlay is still mounted
+    # exp01b lesson: cp after overlay unmount produces 0-byte shells
+    if [ -d "${JOB_DIR}/task/final_model" ]; then
+        echo "Persisting final_model to results dir (overlay still active)..."
+        cp -r "${JOB_DIR}/task/final_model" "$EVAL_DIR/final_model"
+        echo "final_model persisted: $(du -sh "$EVAL_DIR/final_model" 2>/dev/null | cut -f1)"
+    else
+        echo "WARNING: No final_model found after solve"
+    fi
+
+    return $solve_exit
+}
+
 solve_task() {
     timeout --signal=TERM --kill-after=30s "$((NUM_HOURS * 60 + 5))m" \
     apptainer exec \
@@ -201,8 +218,22 @@ echo "================================"
 echo "========= RUNNING TASK ========="
 echo "================================"
 
-with_huggingface_overlay with_record_the_time solve_task
+with_huggingface_overlay with_record_the_time solve_and_persist
 SOLVE_EXIT=$?
+
+# Detect silent training failure: compare final_model vs base_model checksums
+if [ -d "$EVAL_DIR/final_model" ]; then
+    FINAL_CKSUM=$(find "$EVAL_DIR/final_model" -name "*.safetensors" -exec sha256sum {} + 2>/dev/null | sort | sha256sum | cut -d' ' -f1)
+    BASE_MODEL_HF=$(echo "$MODEL_TO_TRAIN" | sed 's|/|--|g')
+    BASE_CKSUM=$(find "${HF_HOME}/hub/models--${BASE_MODEL_HF}" -name "*.safetensors" -exec sha256sum {} + 2>/dev/null | sort | sha256sum | cut -d' ' -f1)
+
+    if [ "$FINAL_CKSUM" = "$BASE_CKSUM" ] && [ -n "$FINAL_CKSUM" ]; then
+        echo "WARNING: final_model checksum matches base_model — training may have failed silently"
+        echo "TRAINING_SILENT_FAIL" > "$EVAL_DIR/training_status.txt"
+    else
+        echo "TRAINING_OK" > "$EVAL_DIR/training_status.txt"
+    fi
+fi
 
 echo "--- SOLVE DIAGNOSTICS ---"
 echo "exit_code: $SOLVE_EXIT"
@@ -273,7 +304,8 @@ echo "Task directory contents:"
 tree ${JOB_DIR}/task
 echo "================================"
 
-if [ -d "${JOB_DIR}/task/final_model" ]; then
+# Fallback: copy if not already persisted by solve_and_persist
+if [ -d "${JOB_DIR}/task/final_model" ] && [ ! -d "$EVAL_DIR/final_model" ]; then
     cp -r "${JOB_DIR}/task/final_model" "$EVAL_DIR/final_model"
 fi
 

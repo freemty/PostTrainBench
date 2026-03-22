@@ -162,4 +162,37 @@ else
     warn "No GEMINI_API_KEY (gemini agent won't work)"
 fi
 
+echo ""
+echo "--- 1h. Lemma Agent Dependencies ---"
+
+# local-lemma path
+LOCAL_LEMMA="${LOCAL_LEMMA_PATH:-$(dirname "${POST_TRAIN_BENCH_ROOT:-$(pwd)}")/local-lemma}"
+if [ -d "$LOCAL_LEMMA/local_backend" ]; then
+    pass "local-lemma found: $LOCAL_LEMMA"
+else
+    warn "local-lemma not found at $LOCAL_LEMMA (lemma agent won't work)"
+fi
+
+# uv binary (needed inside container for lemma deps)
+UV_BIN=$(find /tmp -maxdepth 2 -name uv -type f -executable 2>/dev/null | head -1)
+if [ -n "$UV_BIN" ]; then
+    pass "uv binary found: $UV_BIN"
+else
+    warn "uv binary not found in /tmp (lemma may fail to install deps)"
+fi
+
+# ripgrep (lemma grep tool)
+if which rg >/dev/null 2>&1; then
+    pass "ripgrep found: $(which rg)"
+else
+    warn "ripgrep (rg) not found (lemma grep tool may fail)"
+fi
+
+# Horay.ai (codex_horay agent)
+if [ -n "${HORAY_API_KEY:-}" ]; then
+    pass "HORAY_API_KEY set"
+else
+    warn "No HORAY_API_KEY (codex_horay agent won't work)"
+fi
+
 summary
