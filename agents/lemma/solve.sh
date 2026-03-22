@@ -5,6 +5,11 @@
 unset GEMINI_API_KEY
 unset CODEX_API_KEY
 
+# Re-export critical env vars so agent subprocesses (evaluate.py, vllm, huggingface_hub) see them
+export VLLM_API_KEY="${VLLM_API_KEY:-inspectai}"
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+export HF_HOME="${HF_HOME:-/home/ben/hf_cache}"
+
 LEMMA_ROOT="/opt/local-lemma"
 
 # Ensure ripgrep is in PATH (lemma requires it for grep tool)

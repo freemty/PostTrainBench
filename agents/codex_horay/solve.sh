@@ -7,6 +7,11 @@ unset ANTHROPIC_API_KEY
 unset GEMINI_API_KEY
 unset OPENAI_API_KEY
 
+# Re-export critical env vars so agent subprocesses see them
+export VLLM_API_KEY="${VLLM_API_KEY:-inspectai}"
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+export HF_HOME="${HF_HOME:-/home/ben/hf_cache}"
+
 # Gemini models need chat completions API (responses API returns 502)
 if [[ "$AGENT_CONFIG" == ge* ]]; then
     HORAY_PROVIDER="horay_chat"
