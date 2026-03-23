@@ -61,6 +61,7 @@ export HF_MERGED="${HF_HOME}"
 
 mkdir -p "${JOB_DIR}"
 mkdir -p "${JOB_TMP}"
+chmod 1777 "${JOB_TMP}"
 
 echo "Preparing job directory..." 
 mkdir -p "${JOB_DIR}"
@@ -83,6 +84,14 @@ if [ -d "$HOME/.claude" ]; then
     mkdir -p "${JOB_DIR}/.claude"
     cp "$HOME/.claude/settings.local.json" "${JOB_DIR}/.claude/" 2>/dev/null
     cp "$HOME/.claude/settings.json" "${JOB_DIR}/.claude/" 2>/dev/null
+    # Create subdirs claude CLI needs at runtime (prevents ENOTDIR)
+    mkdir -p "${JOB_DIR}/.claude/debug"
+    mkdir -p "${JOB_DIR}/.claude/cache"
+    mkdir -p "${JOB_DIR}/.claude/projects"
+    # Pre-create project-specific dir: claude CLI converts pwd '/' -> '-'
+    # e.g. /home/ben/task -> -home-ben-task
+    CLAUDE_PROJECT_DIR=$(echo "/home/ben/task" | tr '/' '-')
+    mkdir -p "${JOB_DIR}/.claude/projects/${CLAUDE_PROJECT_DIR}"
 fi
 
 # Copy agent home overlay (skills, agents, CLAUDE.md, etc.)
@@ -327,10 +336,14 @@ print('|'.join([d.get('dataset_id') or '', str(d.get('local', False)), d.get('re
 }
 
 solve_task() {
+    # Resolve GPU UUID for --nvccli hardware isolation (index-based fails for non-GPU-0)
+    local GPU_UUID
+    GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "${CUDA_VISIBLE_DEVICES:-0}" 2>/dev/null | head -1)
+    export NVIDIA_VISIBLE_DEVICES="${GPU_UUID:-${CUDA_VISIBLE_DEVICES:-0}}"
+
     timeout --signal=TERM --kill-after=30s "$((NUM_HOURS * 60 + 5))m" \
     apptainer exec \
-        --nv \
-        -c \
+        --nvccli \
         --env PATH="/root/.local/bin:/home/ben/.local/bin:$PATH" \
         --env HF_HOME="${HF_HOME_NEW}" \
         --env ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
@@ -344,6 +357,7 @@ solve_task() {
         --env PYTHONNOUSERSITE="1" \
         --env PROMPT="${PROMPT}" \
         --env AGENT_CONFIG="${AGENT_CONFIG}" \
+        --env NVIDIA_VISIBLE_DEVICES="${NVIDIA_VISIBLE_DEVICES}" \
         --env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
         --env LEMMA_MAAS_BASE_URL="${LEMMA_MAAS_BASE_URL:-}" \
         --env LEMMA_MAAS_API_KEY="${LEMMA_MAAS_API_KEY:-}" \
@@ -359,7 +373,7 @@ solve_task() {
         --pwd "/home/ben/task" \
         --writable-tmpfs \
         "${POST_TRAIN_BENCH_CONTAINERS_DIR}/${POST_TRAIN_BENCH_CONTAINER_NAME}.sif" \
-        bash -c "python /home/ben/check_cuda.py && python /home/ben/check_cuda_writing.py && bash /home/ben/agent_solve.sh" > "${SOLVE_OUT}" 2>&1
+        bash -c "python3 /home/ben/check_cuda.py && python3 /home/ben/check_cuda_writing.py && bash /home/ben/agent_solve.sh" > "${SOLVE_OUT}" 2>&1
 }
 
 export REPO_ROOT="$(pwd)"
@@ -478,17 +492,43 @@ echo "================================"
 echo "========= EVALUATING ==========="
 echo "================================"
 
-# Guard: skip eval if final_model is missing or empty (agent didn't produce a model)
-if [ ! -d "$EVAL_DIR/final_model" ]; then
-    echo "SKIP EVAL: no final_model directory found"
-    echo '{"error": "no_final_model", "accuracy": null}' > "${EVAL_DIR}/metrics.json"
-    exit 0
+# Guard: skip eval if final_model is missing or empty
+# Distinguish between agent crash (exit 1) vs agent ran full time but no model (exit 0)
+SOLVE_TIME_SECS=-1
+if [ -f "$EVAL_DIR/time_taken.txt" ]; then
+    IFS=: read -r hh mm ss < "$EVAL_DIR/time_taken.txt"
+    SOLVE_TIME_SECS=$(( 10#${hh:-0} * 3600 + 10#${mm:-0} * 60 + 10#${ss:-0} ))
 fi
-SAFETENSOR_COUNT=$(find "$EVAL_DIR/final_model" -name "*.safetensors" -size +0c 2>/dev/null | wc -l)
-if [ "$SAFETENSOR_COUNT" -eq 0 ]; then
-    echo "SKIP EVAL: final_model has no .safetensors files (agent produced empty model)"
-    echo '{"error": "empty_final_model", "accuracy": null}' > "${EVAL_DIR}/metrics.json"
-    exit 0
+BUDGET_SECS=$((NUM_HOURS * 3600))
+# Agent crash = non-zero exit OR ran less than 10% of budget OR no time_taken.txt
+AGENT_CRASHED=false
+if [ "${SOLVE_EXIT:-0}" -ne 0 ] && [ "${SOLVE_EXIT:-0}" -ne 124 ]; then
+    AGENT_CRASHED=true
+elif [ "$SOLVE_TIME_SECS" -eq -1 ]; then
+    # time_taken.txt missing = solve phase didn't complete normally
+    AGENT_CRASHED=true
+elif [ "$SOLVE_TIME_SECS" -gt 0 ] && [ "$SOLVE_TIME_SECS" -lt $((BUDGET_SECS / 10)) ]; then
+    AGENT_CRASHED=true
+fi
+
+NO_MODEL=false
+if [ ! -d "$EVAL_DIR/final_model" ]; then
+    NO_MODEL=true
+else
+    SAFETENSOR_COUNT=$(find "$EVAL_DIR/final_model" -name "*.safetensors" -size +0c 2>/dev/null | wc -l)
+    [ "$SAFETENSOR_COUNT" -eq 0 ] && NO_MODEL=true
+fi
+
+if [ "$NO_MODEL" = true ]; then
+    if [ "$AGENT_CRASHED" = true ]; then
+        echo "AGENT CRASH: no final_model, solve_exit=${SOLVE_EXIT:-?}, ran ${SOLVE_TIME_SECS}s of ${BUDGET_SECS}s budget"
+        echo "{\"error\": \"agent_crash\", \"solve_exit\": ${SOLVE_EXIT:-0}, \"solve_time_secs\": $SOLVE_TIME_SECS, \"accuracy\": null}" > "${EVAL_DIR}/metrics.json"
+        exit 1
+    else
+        echo "SKIP EVAL: agent completed but no final_model (ran ${SOLVE_TIME_SECS}s)"
+        echo "{\"error\": \"no_final_model\", \"solve_time_secs\": $SOLVE_TIME_SECS, \"accuracy\": null}" > "${EVAL_DIR}/metrics.json"
+        exit 0
+    fi
 fi
 echo "final_model OK: $SAFETENSOR_COUNT safetensors files"
 

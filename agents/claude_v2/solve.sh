@@ -25,7 +25,7 @@ if [ "$(id -u)" -eq 0 ]; then
     useradd -m -s /bin/bash ben 2>/dev/null || true
     # Ensure .claude is a directory with required subdirs (prevents ENOTDIR crash)
     [ -f /home/ben/.claude ] && rm -f /home/ben/.claude
-    mkdir -p /home/ben/.claude/{debug,cache,projects}
+    mkdir -p /home/ben/.claude/debug /home/ben/.claude/cache /home/ben/.claude/projects
     # Chown home dir (non-recursive) + working subdirs. Skip hf_cache (hundreds of GB via overlayfs)
     chown ben:ben /home/ben 2>/dev/null || true
     chown -R ben:ben /home/ben/.claude /home/ben/.codex /home/ben/task 2>/dev/null || true
@@ -37,7 +37,7 @@ if [ "$(id -u)" -eq 0 ]; then
         export PROMPT='$PROMPT'
         export HOME=/home/ben
         export PATH='/root/.local/bin:/home/ben/.local/bin:$PATH'
-        mkdir -p \\\$HOME/.claude/{debug,cache,projects}
+        mkdir -p \\\$HOME/.claude/debug \\\$HOME/.claude/cache \\\$HOME/.claude/projects
         claude --print --verbose --model \"\$AGENT_CONFIG\" --output-format stream-json \
             --dangerously-skip-permissions \"\$PROMPT\"
     " ben

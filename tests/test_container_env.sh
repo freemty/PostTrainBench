@@ -11,7 +11,7 @@
 #
 # Usage: cd ~/PostTrainBench && bash tests/test_container_env.sh
 
-set -eo pipefail
+set +e
 source "$(dirname "$0")/preflight_utils.sh"
 
 if [ ! -f "$CONTAINER" ]; then
@@ -136,11 +136,11 @@ CLAUDE_OUT=$(apptainer exec --nv --writable-tmpfs \
     "$CONTAINER" bash -c '
     useradd -m -s /bin/bash ben 2>/dev/null || true
     [ -f /home/ben/.claude ] && rm -f /home/ben/.claude
-    mkdir -p /home/ben/.claude/{debug,cache,projects}
+    mkdir -p /home/ben/.claude/debug /home/ben/.claude/cache /home/ben/.claude/projects
     chown -R ben:ben /home/ben/.claude /home/ben/.codex /home/ben/task 2>/dev/null || true
     su -s /bin/bash -c "
         export HOME=/home/ben
-        mkdir -p \$HOME/.claude/{debug,cache,projects}
+        mkdir -p \$HOME/.claude/debug \$HOME/.claude/cache \$HOME/.claude/projects
         claude --version 2>&1 | head -1
     " ben
 ' 2>&1) || CLAUDE_OUT="ERROR: $CLAUDE_OUT"

@@ -4,7 +4,7 @@ unset CODEX_API_KEY
 
 # Defensive: ensure .claude is a directory with required subdirs
 [ -f "$HOME/.claude" ] && rm -f "$HOME/.claude"
-mkdir -p "$HOME/.claude/{debug,cache,projects}"
+mkdir -p "$HOME/.claude/debug" "$HOME/.claude/cache" "$HOME/.claude/projects"
 
 # Clear API key so the CLI uses the OAuth token from subscription
 export ANTHROPIC_API_KEY=""
