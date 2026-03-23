@@ -2,6 +2,10 @@
 unset ANTHROPIC_API_KEY
 unset GEMINI_API_KEY
 
+# Defensive: ensure .codex is a directory
+[ -f "$HOME/.codex" ] && rm -f "$HOME/.codex"
+mkdir -p "$HOME/.codex"
+
 # Clear API keys so the CLI uses the ChatGPT Pro auth from auth.json
 export CODEX_API_KEY=""
 export OPENAI_API_KEY=""

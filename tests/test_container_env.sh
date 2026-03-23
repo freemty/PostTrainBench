@@ -113,6 +113,127 @@ else
 fi
 
 echo ""
+echo "--- 2d2. Agent CLI Init (simulated JOB_DIR) ---"
+# Simulates the full JOB_DIR setup from run_task.sh for each agent CLI,
+# verifying the CLI can initialize without crashes (ENOTDIR, missing config, etc.).
+# Each test mirrors what run_task.sh + solve.sh does: create home, copy config, run as ben.
+
+CLI_TEST_HOME="${PTB_TMP_BASE}/preflight_cli_init_$$"
+
+# --- claude ---
+mkdir -p "${CLI_TEST_HOME}/.claude" "${CLI_TEST_HOME}/.codex" "${CLI_TEST_HOME}/task"
+if [ -d "$HOME/.claude" ]; then
+    cp "$HOME/.claude/settings.local.json" "${CLI_TEST_HOME}/.claude/" 2>/dev/null || true
+    cp "$HOME/.claude/settings.json" "${CLI_TEST_HOME}/.claude/" 2>/dev/null || true
+fi
+if [ -d "containers/other_home_data/.codex" ]; then
+    cp -r "containers/other_home_data/.codex/." "${CLI_TEST_HOME}/.codex/" 2>/dev/null || true
+fi
+
+CLAUDE_OUT=$(apptainer exec --nv --writable-tmpfs \
+    --home "${CLI_TEST_HOME}:/home/ben" \
+    --pwd "/home/ben/task" \
+    "$CONTAINER" bash -c '
+    useradd -m -s /bin/bash ben 2>/dev/null || true
+    [ -f /home/ben/.claude ] && rm -f /home/ben/.claude
+    mkdir -p /home/ben/.claude/{debug,cache,projects}
+    chown -R ben:ben /home/ben/.claude /home/ben/.codex /home/ben/task 2>/dev/null || true
+    su -s /bin/bash -c "
+        export HOME=/home/ben
+        mkdir -p \$HOME/.claude/{debug,cache,projects}
+        claude --version 2>&1 | head -1
+    " ben
+' 2>&1) || CLAUDE_OUT="ERROR: $CLAUDE_OUT"
+
+if echo "$CLAUDE_OUT" | grep -qE "[0-9]+\.[0-9]+|claude"; then
+    pass "claude CLI init: $(echo "$CLAUDE_OUT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || echo ok)"
+else
+    fail "claude CLI init failed: $(echo "$CLAUDE_OUT" | tail -3)"
+fi
+
+# --- codex ---
+CODEX_OUT=$(apptainer exec --nv --writable-tmpfs \
+    --home "${CLI_TEST_HOME}:/home/ben" \
+    --pwd "/home/ben/task" \
+    "$CONTAINER" bash -c '
+    useradd -m -s /bin/bash ben 2>/dev/null || true
+    chown -R ben:ben /home/ben/.codex 2>/dev/null || true
+    su -s /bin/bash -c "
+        export HOME=/home/ben
+        codex --version 2>&1 | head -1
+    " ben
+' 2>&1) || CODEX_OUT="ERROR: $CODEX_OUT"
+
+if echo "$CODEX_OUT" | grep -qE "[0-9]+\.[0-9]+|codex"; then
+    pass "codex CLI init: $(echo "$CODEX_OUT" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | tail -1 || echo ok)"
+else
+    fail "codex CLI init failed: $(echo "$CODEX_OUT" | tail -3)"
+fi
+
+# --- gemini ---
+# gemini --version outputs Node.js deprecation warnings, so test with --help instead
+GEMINI_OUT=$(apptainer exec --nv --writable-tmpfs \
+    --home "${CLI_TEST_HOME}:/home/ben" \
+    --pwd "/home/ben/task" \
+    "$CONTAINER" bash -c '
+    useradd -m -s /bin/bash ben 2>/dev/null || true
+    mkdir -p /home/ben/.config/gemini /home/ben/.cache/gemini 2>/dev/null || true
+    su -s /bin/bash -c "
+        export HOME=/home/ben
+        mkdir -p \$HOME/.config/gemini \$HOME/.cache/gemini
+        gemini --help 2>&1 | head -3
+    " ben
+' 2>&1) || GEMINI_OUT="ERROR: $GEMINI_OUT"
+
+if echo "$GEMINI_OUT" | grep -qiE "gemini|usage|options"; then
+    pass "gemini CLI init: responds to --help"
+else
+    fail "gemini CLI init failed: $(echo "$GEMINI_OUT" | tail -3)"
+fi
+
+# --- lemma (uv install + Python import + config generation) ---
+# Mirrors solve.sh: uv pip install, then import local_backend
+LOCAL_LEMMA="${LOCAL_LEMMA_PATH:-$(dirname "$(pwd)")/local-lemma}"
+UV_HOST_BIN=$(find /tmp -maxdepth 2 -name uv -type f -executable 2>/dev/null | head -1)
+UV_HOST_DIR="${UV_HOST_BIN:+$(dirname "$UV_HOST_BIN")}"
+RG_HOST_DIR="$(dirname "$(which rg 2>/dev/null || echo /usr/bin/rg)")"
+
+if [ -d "$LOCAL_LEMMA/local_backend" ]; then
+    LEMMA_OUT=$(apptainer exec --nv --writable-tmpfs \
+        --bind "${LOCAL_LEMMA}:/opt/local-lemma" \
+        ${UV_HOST_DIR:+--bind "${UV_HOST_DIR}:/opt/uv-bin"} \
+        ${RG_HOST_DIR:+--bind "${RG_HOST_DIR}:/opt/rg-bin"} \
+        --home "${CLI_TEST_HOME}:/home/ben" \
+        --pwd "/home/ben/task" \
+        "$CONTAINER" bash -c '
+        export PYTHONPATH="/opt/local-lemma:$PYTHONPATH"
+        # Install deps (same as lemma solve.sh)
+        UV_BIN="/opt/uv-bin/uv"
+        if [ -x "$UV_BIN" ]; then
+            "$UV_BIN" pip install --system -e /opt/local-lemma --quiet 2>&1 | tail -3
+        fi
+        python3 -c "
+from local_backend.run import main
+import yaml
+print(\"lemma import OK\")
+config = {\"llm\": {\"provider\": \"bedrock\", \"model\": \"test\"}}
+yaml.dump(config)
+print(\"yaml config OK\")
+"
+    ' 2>&1) || LEMMA_OUT="ERROR: $LEMMA_OUT"
+
+    if echo "$LEMMA_OUT" | grep -q "lemma import OK"; then
+        pass "lemma init: uv install + import + config generation"
+    else
+        fail "lemma init failed: $(echo "$LEMMA_OUT" | tail -3)"
+    fi
+else
+    warn "lemma: local-lemma not found at ${LOCAL_LEMMA} (skipped)"
+fi
+
+rm -rf "${CLI_TEST_HOME}"
+
+echo ""
 echo "--- 2e. fuse-overlayfs ---"
 
 TEST_TMP="${PTB_TMP_BASE}/preflight_overlay_test_$$"

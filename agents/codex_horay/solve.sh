@@ -7,6 +7,10 @@ unset ANTHROPIC_API_KEY
 unset GEMINI_API_KEY
 unset OPENAI_API_KEY
 
+# Defensive: ensure .codex is a directory (prevents ENOTDIR-class crashes)
+[ -f "$HOME/.codex" ] && rm -f "$HOME/.codex"
+mkdir -p "$HOME/.codex"
+
 # Re-export critical env vars so agent subprocesses see them
 export VLLM_API_KEY="${VLLM_API_KEY:-inspectai}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"

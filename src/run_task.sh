@@ -478,6 +478,20 @@ echo "================================"
 echo "========= EVALUATING ==========="
 echo "================================"
 
+# Guard: skip eval if final_model is missing or empty (agent didn't produce a model)
+if [ ! -d "$EVAL_DIR/final_model" ]; then
+    echo "SKIP EVAL: no final_model directory found"
+    echo '{"error": "no_final_model", "accuracy": null}' > "${EVAL_DIR}/metrics.json"
+    exit 0
+fi
+SAFETENSOR_COUNT=$(find "$EVAL_DIR/final_model" -name "*.safetensors" -size +0c 2>/dev/null | wc -l)
+if [ "$SAFETENSOR_COUNT" -eq 0 ]; then
+    echo "SKIP EVAL: final_model has no .safetensors files (agent produced empty model)"
+    echo '{"error": "empty_final_model", "accuracy": null}' > "${EVAL_DIR}/metrics.json"
+    exit 0
+fi
+echo "final_model OK: $SAFETENSOR_COUNT safetensors files"
+
 export REPO_ROOT="$(pwd)"
 
 export TMP_HF_CACHE="${PTB_TMP_BASE}/hf_cache_90afd0"
