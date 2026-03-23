@@ -106,6 +106,20 @@ if [ -d "$HOME/.claude" ]; then
     mkdir -p "${JOB_DIR}/.claude/projects/${CLAUDE_PROJECT_DIR}"
 fi
 
+# GitHub SSH for container (HTTPS is throttled on CN servers, SSH works)
+if [ -f "$HOME/.ssh/id_ed25519" ]; then
+    mkdir -p "${JOB_DIR}/.ssh"
+    cp "$HOME/.ssh/id_ed25519" "${JOB_DIR}/.ssh/"
+    cp "$HOME/.ssh/id_ed25519.pub" "${JOB_DIR}/.ssh/" 2>/dev/null
+    # Hardcoded GitHub host key to avoid interactive prompt inside container
+    echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "${JOB_DIR}/.ssh/known_hosts"
+    chmod 700 "${JOB_DIR}/.ssh"
+    chmod 600 "${JOB_DIR}/.ssh/id_ed25519"
+fi
+if [ -f "$HOME/.gitconfig" ]; then
+    cp "$HOME/.gitconfig" "${JOB_DIR}/.gitconfig"
+fi
+
 # Copy agent home overlay (skills, agents, CLAUDE.md, etc.)
 if [ -d "agents/${AGENT}/home" ]; then
     cp -r "agents/${AGENT}/home/." "${JOB_DIR}/"
@@ -217,7 +231,7 @@ network_probe() {
         local hf_speed
         hf_speed=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "${HF_ENDPOINT}/api/models" 2>/dev/null || echo "0")
         hf_speed="${hf_speed//[^0-9.]/}"
-        if awk "BEGIN{exit(${hf_speed:-0} > 1000 ? 0 : 1)}"; then
+        if awk "BEGIN{exit(${hf_speed:-0} > 10000 ? 0 : 1)}"; then
             echo "  [INFO] HF_ENDPOINT=${HF_ENDPOINT} reachable (${hf_speed} B/s)"
         else
             echo "  [WARN] HF_ENDPOINT=${HF_ENDPOINT} unreachable, probing alternatives..."
@@ -234,7 +248,7 @@ network_probe() {
 
         local max_speed
         max_speed=$(awk "BEGIN{print (${speed_mirror:-0} > ${speed_direct:-0}) ? ${speed_mirror:-0} : ${speed_direct:-0}}")
-        if awk "BEGIN{exit(${max_speed:-0} > 1000 ? 0 : 1)}"; then
+        if awk "BEGIN{exit(${max_speed:-0} > 10000 ? 0 : 1)}"; then
             if awk "BEGIN{exit(${speed_mirror:-0} >= ${speed_direct:-0} ? 0 : 1)}"; then
                 export HF_ENDPOINT="https://hf-mirror.com"
             else
@@ -256,10 +270,10 @@ network_probe() {
         speed_pypi="${speed_pypi//[^0-9.]/}"
 
         if awk "BEGIN{exit(${speed_aliyun:-0} >= ${speed_pypi:-0} ? 0 : 1)}" && \
-           awk "BEGIN{exit(${speed_aliyun:-0} > 1000 ? 0 : 1)}"; then
+           awk "BEGIN{exit(${speed_aliyun:-0} > 10000 ? 0 : 1)}"; then
             export UV_INDEX_URL="https://mirrors.aliyun.com/pypi/simple/"
             echo "  [INFO] Auto-selected UV_INDEX_URL=${UV_INDEX_URL}"
-        elif awk "BEGIN{exit(${speed_pypi:-0} > 1000 ? 0 : 1)}"; then
+        elif awk "BEGIN{exit(${speed_pypi:-0} > 10000 ? 0 : 1)}"; then
             echo "  [INFO] pypi.org reachable, using default"
         fi
     else
