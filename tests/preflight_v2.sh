@@ -133,14 +133,7 @@ for slot in "${SLOT_ARRAY[@]}"; do
         PASS_COUNT=$((PASS_COUNT + 1))
     else
         fail "$agent GPU $gpu: FAIL (exit $EXIT_CODE)"
-        # Show solve_out tail for diagnosis
-        DRYRUN_DIR="${PTB_TMP_BASE}/posttrain_container_${TASK}_$(echo "$MODEL" | tr '/:' '_')_*"
-        for d in $DRYRUN_DIR; do
-            if [ -f "$d/../solve_out.txt" ] || [ -f "${POST_TRAIN_BENCH_RESULTS_DIR}/"*"dryrun_${EXP}_g${gpu}/solve_out.txt" ]; then
-                break
-            fi
-        done
-        # Best effort: find the dryrun solve_out
+        # Best effort: find the dryrun solve_out for diagnosis
         DRYRUN_EVAL="${POST_TRAIN_BENCH_RESULTS_DIR}/${agent}_${config}_0h_${EXP}/${TASK}_$(echo "$MODEL" | tr '/:' '_')_dryrun_${EXP}_g${gpu}"
         if [ -f "$DRYRUN_EVAL/solve_out.txt" ]; then
             echo "  --- solve_out tail ---"

@@ -349,13 +349,26 @@ print('|'.join([d.get('dataset_id') or '', str(d.get('local', False)), d.get('re
     return 0
 }
 
+resolve_gpu_uuid() {
+    local cuda_dev="${1:-${CUDA_VISIBLE_DEVICES:-0}}"
+    local uuid
+    uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "$cuda_dev" 2>/dev/null | head -1)
+    echo "${uuid:-$cuda_dev}"
+}
+
 solve_task() {
     # Resolve GPU UUID for --nvccli hardware isolation (index-based fails for non-GPU-0)
-    local GPU_UUID
-    GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "${CUDA_VISIBLE_DEVICES:-0}" 2>/dev/null | head -1)
-    export NVIDIA_VISIBLE_DEVICES="${GPU_UUID:-${CUDA_VISIBLE_DEVICES:-0}}"
+    export NVIDIA_VISIBLE_DEVICES="$(resolve_gpu_uuid)"
 
-    timeout --signal=TERM --kill-after=30s "$((NUM_HOURS * 60 + 5))m" \
+    # Dry-run: 1 min timeout (PONG should take <30s). Normal: full budget + 5 min grace.
+    local TIMEOUT_MINS
+    if [ "$DRY_RUN" = true ]; then
+        TIMEOUT_MINS=1
+    else
+        TIMEOUT_MINS=$((NUM_HOURS * 60 + 5))
+    fi
+
+    timeout --signal=TERM --kill-after=30s "${TIMEOUT_MINS}m" \
     apptainer exec \
         --nvccli \
         --env PATH="/root/.local/bin:/home/ben/.local/bin:$PATH" \
@@ -408,6 +421,9 @@ SOLVE_EXIT=$?
 
 # ── Dry-run: check PONG + vLLM smoke test, then exit ──
 if [ "$DRY_RUN" = true ]; then
+    cleanup_dryrun() { rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}" 2>/dev/null; }
+    trap cleanup_dryrun EXIT
+
     # Step 1: Agent PONG check
     if grep -q "PONG" "${SOLVE_OUT}" 2>/dev/null; then
         echo "DRY-RUN: agent PONG — OK"
@@ -415,14 +431,12 @@ if [ "$DRY_RUN" = true ]; then
         echo "DRY-RUN FAIL: no PONG in solve_out (exit=$SOLVE_EXIT)"
         echo "--- solve_out tail ---"
         tail -20 "${SOLVE_OUT}" 2>/dev/null
-        rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
         exit 1
     fi
 
     # Step 2: vLLM eval chain test — serve base model, health check, one inference
     echo "DRY-RUN: testing vLLM eval chain with base model..."
-    GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "${CUDA_VISIBLE_DEVICES:-0}" 2>/dev/null | head -1)
-    export NVIDIA_VISIBLE_DEVICES="${GPU_UUID:-${CUDA_VISIBLE_DEVICES:-0}}"
+    export NVIDIA_VISIBLE_DEVICES="$(resolve_gpu_uuid)"
     VLLM_PORT=$((40000 + RANDOM % 10000))
 
     # Determine chat template
@@ -453,26 +467,24 @@ if [ "$DRY_RUN" = true ]; then
         > "${EVAL_DIR}/dryrun_vllm.log" 2>&1 &
     VLLM_PID=$!
 
-    # Wait for health (up to 120s)
+    # Wait for health (up to 120s, faster polling initially)
     VLLM_OK=false
-    for i in $(seq 1 40); do
+    for i in $(seq 1 60); do
         if curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; then
             VLLM_OK=true; break
         fi
         if ! kill -0 $VLLM_PID 2>/dev/null; then
             echo "DRY-RUN FAIL: vLLM process died"
             tail -20 "${EVAL_DIR}/dryrun_vllm.log" 2>/dev/null
-            rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
             exit 1
         fi
-        sleep 3
+        [ $i -le 20 ] && sleep 1 || sleep 3
     done
 
     if [ "$VLLM_OK" = false ]; then
         echo "DRY-RUN FAIL: vLLM health timeout (120s)"
         kill $VLLM_PID 2>/dev/null; wait $VLLM_PID 2>/dev/null
         tail -20 "${EVAL_DIR}/dryrun_vllm.log" 2>/dev/null
-        rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
         exit 1
     fi
 
@@ -490,13 +502,11 @@ if [ "$DRY_RUN" = true ]; then
     else
         echo "DRY-RUN FAIL: vLLM inference failed"
         echo "  response: $RESP"
-        rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
         exit 1
     fi
 
     echo ""
     echo "DRY-RUN PASS: agent + vLLM all OK"
-    rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
     exit 0
 fi
 

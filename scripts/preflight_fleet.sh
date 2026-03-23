@@ -71,7 +71,7 @@ for i in "${!NODES[@]}"; do
     echo "Launching: $ip ($task)"
     ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$ip" \
         "cd ~/PostTrainBench && source ~/.fleet_env && \
-         bash tests/preflight_v2.sh --exp '$EXP' --slots '$SLOTS' --model '$MODEL' --task '$task'" \
+         bash tests/preflight_v2.sh --exp \"$EXP\" --slots \"$SLOTS\" --model \"$MODEL\" --task \"$task\"" \
         > "$LOG_DIR/${ip}_${task}.log" 2>&1 &
     PIDS+=($!)
 done
