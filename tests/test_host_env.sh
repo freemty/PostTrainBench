@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED: Covered by preflight_v2.sh fast-fail checks + run_task.sh --dry-run.
 # Test 1: Host Environment
 #
 # Verifies the host machine is ready before launching experiments:

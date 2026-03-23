@@ -8,9 +8,11 @@ NUM_HOURS="$5"
 AGENT_CONFIG="$6"
 
 SKIP_NETWORK_PROBE=false
+DRY_RUN=false
 for arg in "${@:7}"; do
     case "$arg" in
         --skip-network-probe) SKIP_NETWORK_PROBE=true ;;
+        --dry-run) DRY_RUN=true ;;
     esac
 done
 
@@ -43,8 +45,18 @@ export EVAL_DIR="${POST_TRAIN_BENCH_RESULTS_DIR}/${AGENT}_${AGENT_CONFIG_SAFE}_$
 
 mkdir -p ${EVAL_DIR}
 
+# ── Dry-run mode: override params, short timeout, PONG prompt ──
+if [ "$DRY_RUN" = true ]; then
+    NUM_HOURS=0
+    PROMPT="Reply with exactly the word PONG and nothing else."
+    export DRY_RUN=true
+    echo "DRY-RUN mode: agent PONG test + vLLM smoke test"
+fi
+
+if [ "$DRY_RUN" = false ]; then
 exec 1>${EVAL_DIR}/output.log
 exec 2>${EVAL_DIR}/error.log
+fi
 
 echo "$@"
 
@@ -100,7 +112,9 @@ if [ -d "agents/${AGENT}/home" ]; then
 fi
 
 BENCHMARK=$(cat src/eval/tasks/${EVALUATION_TASK}/benchmark.txt)
-PROMPT=$(python3 src/eval/general/get_prompt.py --model-to-train "$MODEL_TO_TRAIN" --benchmark-id "$EVALUATION_TASK" --num-hours "$NUM_HOURS" --agent "${AGENT}")
+if [ "$DRY_RUN" = false ]; then
+    PROMPT=$(python3 src/eval/general/get_prompt.py --model-to-train "$MODEL_TO_TRAIN" --benchmark-id "$EVALUATION_TASK" --num-hours "$NUM_HOURS" --agent "${AGENT}")
+fi
 echo "$PROMPT" > "${EVAL_DIR}/prompt.txt"
 
 bash src/utils/create_timer.sh $NUM_HOURS $JOB_DIR/task/timer.sh
@@ -391,6 +405,100 @@ echo "================================"
 
 with_huggingface_overlay with_record_the_time solve_and_persist
 SOLVE_EXIT=$?
+
+# ── Dry-run: check PONG + vLLM smoke test, then exit ──
+if [ "$DRY_RUN" = true ]; then
+    # Step 1: Agent PONG check
+    if grep -q "PONG" "${SOLVE_OUT}" 2>/dev/null; then
+        echo "DRY-RUN: agent PONG — OK"
+    else
+        echo "DRY-RUN FAIL: no PONG in solve_out (exit=$SOLVE_EXIT)"
+        echo "--- solve_out tail ---"
+        tail -20 "${SOLVE_OUT}" 2>/dev/null
+        rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
+        exit 1
+    fi
+
+    # Step 2: vLLM eval chain test — serve base model, health check, one inference
+    echo "DRY-RUN: testing vLLM eval chain with base model..."
+    GPU_UUID=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i "${CUDA_VISIBLE_DEVICES:-0}" 2>/dev/null | head -1)
+    export NVIDIA_VISIBLE_DEVICES="${GPU_UUID:-${CUDA_VISIBLE_DEVICES:-0}}"
+    VLLM_PORT=$((40000 + RANDOM % 10000))
+
+    # Determine chat template
+    CHAT_TEMPLATE=""
+    case "$MODEL_TO_TRAIN" in
+        *gemma*)  CHAT_TEMPLATE="src/eval/templates/gemma3.jinja" ;;
+        *Qwen*)   CHAT_TEMPLATE="src/eval/templates/qwen3.jinja" ;;
+        *SmolLM*) CHAT_TEMPLATE="src/eval/templates/smollm.jinja" ;;
+    esac
+    TEMPLATE_ARG=""
+    [ -n "$CHAT_TEMPLATE" ] && TEMPLATE_ARG="--chat-template ${REPO_ROOT}/${CHAT_TEMPLATE}"
+
+    timeout 150s apptainer exec --nvccli \
+        --env "HF_HOME=${HF_MERGED}" \
+        --env VLLM_API_KEY="inspectai" \
+        --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+        --env TMPDIR="${JOB_TMP}" \
+        --writable-tmpfs \
+        --bind "${HF_MERGED}:${HF_MERGED}" \
+        --bind "${REPO_ROOT}:${REPO_ROOT}" \
+        "${CONTAINER}" \
+        vllm serve "${MODEL_TO_TRAIN}" \
+            --host 0.0.0.0 --port ${VLLM_PORT} \
+            --api-key inspectai \
+            --gpu-memory-utilization 0.5 \
+            --max-model-len 512 \
+            ${TEMPLATE_ARG} \
+        > "${EVAL_DIR}/dryrun_vllm.log" 2>&1 &
+    VLLM_PID=$!
+
+    # Wait for health (up to 120s)
+    VLLM_OK=false
+    for i in $(seq 1 40); do
+        if curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; then
+            VLLM_OK=true; break
+        fi
+        if ! kill -0 $VLLM_PID 2>/dev/null; then
+            echo "DRY-RUN FAIL: vLLM process died"
+            tail -20 "${EVAL_DIR}/dryrun_vllm.log" 2>/dev/null
+            rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
+            exit 1
+        fi
+        sleep 3
+    done
+
+    if [ "$VLLM_OK" = false ]; then
+        echo "DRY-RUN FAIL: vLLM health timeout (120s)"
+        kill $VLLM_PID 2>/dev/null; wait $VLLM_PID 2>/dev/null
+        tail -20 "${EVAL_DIR}/dryrun_vllm.log" 2>/dev/null
+        rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
+        exit 1
+    fi
+
+    # One chat completion
+    RESP=$(curl -sf -X POST "http://localhost:${VLLM_PORT}/v1/chat/completions" \
+        -H "Authorization: Bearer inspectai" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"'"${MODEL_TO_TRAIN}"'","messages":[{"role":"user","content":"Say hi"}],"max_tokens":5}' \
+        2>/dev/null)
+
+    kill $VLLM_PID 2>/dev/null; wait $VLLM_PID 2>/dev/null
+
+    if echo "$RESP" | python3 -c "import sys,json; c=json.load(sys.stdin)['choices'][0]; print('OK')" >/dev/null 2>&1; then
+        echo "DRY-RUN: vLLM inference — OK"
+    else
+        echo "DRY-RUN FAIL: vLLM inference failed"
+        echo "  response: $RESP"
+        rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
+        exit 1
+    fi
+
+    echo ""
+    echo "DRY-RUN PASS: agent + vLLM all OK"
+    rm -rf "${TMP_SUBDIR}" "${EVAL_DIR}"
+    exit 0
+fi
 
 # Detect silent training failure: compare final_model vs base_model checksums
 if [ -d "$EVAL_DIR/final_model" ]; then

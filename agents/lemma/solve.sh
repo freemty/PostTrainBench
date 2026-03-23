@@ -82,11 +82,18 @@ with open('$LEMMA_CONFIG_DIR/config.yaml', 'w') as f:
 print(f'Generated lemma config: model={model_id}, region={config[\"llm\"][\"aws_region\"]}')
 "
 
+# Dry-run: single turn only (agent says PONG and exits)
+if [ "${DRY_RUN:-}" = "true" ]; then
+    MAX_TURNS="--max-turns 1"
+else
+    MAX_TURNS="--max-turns -1"
+fi
+
 # Run lemma in batch mode
 python3 -m local_backend.run \
     --repo-root "$LEMMA_ROOT" \
     --working-dir /home/ben/task \
     --user "$PROMPT" \
-    --max-turns -1 \
+    $MAX_TURNS \
     --model "$LEMMA_MODEL" \
     --auto-confirm

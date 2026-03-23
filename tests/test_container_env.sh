@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED: Covered by run_task.sh --dry-run (same apptainer flags, same container).
 # Test 2: Container Environment
 #
 # Verifies the Apptainer container is functional:

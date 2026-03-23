@@ -1,5 +1,9 @@
 #!/bin/bash
-# PostTrainBench Preflight Test Suite
+# DEPRECATED: Use tests/preflight_v2.sh instead.
+# This script runs independent test scripts that don't share code paths with run_task.sh.
+# preflight_v2.sh uses run_task.sh --dry-run for complete coverage.
+#
+# PostTrainBench Preflight Test Suite (legacy)
 #
 # Run ALL pre-experiment checks in sequence. Exit code = total failures.
 # Usage: cd ~/PostTrainBench && bash tests/preflight.sh [--skip-api]

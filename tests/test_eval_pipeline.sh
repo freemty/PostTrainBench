@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED: Covered by run_task.sh --dry-run vLLM smoke test (same bind-mounts, same flags).
 # Test 3: Evaluation Pipeline
 #
 # Verifies the eval pipeline works end-to-end before real experiments:

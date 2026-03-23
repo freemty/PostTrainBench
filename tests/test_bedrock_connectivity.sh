@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED: Covered by run_task.sh --dry-run agent PONG test (real API call through real agent).
 # PostTrainBench Bedrock Connectivity Test
 #
 # Verifies that Claude Code can reach AWS Bedrock from inside the Apptainer container,

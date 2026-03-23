@@ -1,4 +1,5 @@
 #!/bin/bash
+# DEPRECATED: Covered by run_task.sh --dry-run agent PONG test (codex_horay uses real Horay API).
 # Test 5: Horay.ai Proxy Connectivity
 #
 # Verifies codex can reach Horay.ai API from inside the container.

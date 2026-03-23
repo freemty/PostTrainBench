@@ -1,95 +1,119 @@
 #!/bin/bash
-# preflight_fleet.sh - Run preflight on all fleet nodes in parallel
-# Usage: bash scripts/preflight_fleet.sh [--skip-api] [node_ip ...]
-# Run from online00 (bastion).
+# preflight_fleet.sh — run preflight_v2 across all fleet nodes in parallel
+#
+# Usage:
+#   bash scripts/preflight_fleet.sh --exp exp02b \
+#     --slots "claude:0:claude-opus-4-6,lemma:1:claude-opus-4-6,codex_horay:2:g5.2-rxj" \
+#     --model google/gemma-3-4b-pt --tasks-file fleet_tasks.txt
+#
+# fleet_tasks.txt format (IP + task per line):
+#   172.31.10.168 gsm8k
+#   172.31.10.161 aime2025
+#   ...
+#
+# If --tasks-file is omitted, runs the same task on all default nodes.
 
 set -euo pipefail
 
 ALL_NODES=(172.31.10.163 172.31.10.168 172.31.10.161 172.31.10.166 172.31.10.165 172.31.10.167 172.31.10.175 172.31.10.173)
-SKIP_API_FLAG=""
-NODES=()
 
-for arg in "$@"; do
-    case "$arg" in
-        --skip-api) SKIP_API_FLAG="--skip-api" ;;
-        *) NODES+=("$arg") ;;
+EXP="" SLOTS="" MODEL="" TASKS_FILE="" TASK=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --exp) EXP="$2"; shift 2 ;;
+        --slots) SLOTS="$2"; shift 2 ;;
+        --model) MODEL="$2"; shift 2 ;;
+        --task) TASK="$2"; shift 2 ;;
+        --tasks-file) TASKS_FILE="$2"; shift 2 ;;
+        *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
 
-if [ ${#NODES[@]} -eq 0 ]; then
-    NODES=("${ALL_NODES[@]}")
+if [ -z "$EXP" ] || [ -z "$SLOTS" ] || [ -z "$MODEL" ]; then
+    echo "Usage: bash scripts/preflight_fleet.sh --exp <id> --slots <config> --model <model> [--task <task> | --tasks-file <file>]"
+    exit 1
 fi
 
-RESULTS_DIR="/tmp/preflight_fleet_$$"
-mkdir -p "$RESULTS_DIR"
-trap "rm -rf '$RESULTS_DIR'" EXIT
+LOG_DIR="/tmp/preflight_fleet_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$LOG_DIR"
 
-echo "=== Fleet Preflight: ${#NODES[@]} nodes ==="
+echo "============================================"
+echo "  Fleet Preflight v2"
+echo "  Exp: $EXP | Model: $MODEL"
+echo "  Logs: $LOG_DIR"
+echo "============================================"
 echo ""
 
-# Launch preflight on all nodes in parallel
+# Build node+task pairs
+NODES=()
+TASKS=()
+if [ -n "$TASKS_FILE" ] && [ -f "$TASKS_FILE" ]; then
+    while read -r ip task; do
+        [ -z "$ip" ] && continue
+        NODES+=("$ip")
+        TASKS+=("$task")
+    done < "$TASKS_FILE"
+elif [ -n "$TASK" ]; then
+    for ip in "${ALL_NODES[@]}"; do
+        NODES+=("$ip")
+        TASKS+=("$TASK")
+    done
+else
+    echo "ERROR: specify --task or --tasks-file"
+    exit 1
+fi
+
+# Launch preflight on each node in parallel
 PIDS=()
-for ip in "${NODES[@]}"; do
-    (
-        echo "[$ip] Starting preflight..."
-        ssh -o ConnectTimeout=10 "$ip" \
-            "cd ~/PostTrainBench && bash tests/preflight.sh $SKIP_API_FLAG" \
-            > "$RESULTS_DIR/$ip.log" 2>&1
-        echo $? > "$RESULTS_DIR/$ip.exit"
-    ) &
+for i in "${!NODES[@]}"; do
+    ip="${NODES[$i]}"
+    task="${TASKS[$i]}"
+    echo "Launching: $ip ($task)"
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$ip" \
+        "cd ~/PostTrainBench && source ~/.fleet_env && \
+         bash tests/preflight_v2.sh --exp '$EXP' --slots '$SLOTS' --model '$MODEL' --task '$task'" \
+        > "$LOG_DIR/${ip}_${task}.log" 2>&1 &
     PIDS+=($!)
 done
 
-# Wait for all
-for pid in "${PIDS[@]}"; do
-    wait $pid 2>/dev/null || true
+echo ""
+echo "Waiting for ${#PIDS[@]} nodes..."
+
+# Wait and collect exit codes
+RESULTS=()
+for i in "${!PIDS[@]}"; do
+    set +e
+    wait "${PIDS[$i]}" 2>/dev/null
+    RESULTS+=($?)
+    set -e
 done
 
-# Aggregate results
+# Summary
 echo ""
-echo "=== Fleet Preflight Results ==="
-echo ""
-
-FLEET_PASS=0
+echo "============================================"
+echo "  Fleet Preflight Summary"
+echo "============================================"
 FLEET_FAIL=0
-for ip in "${NODES[@]}"; do
-    EXIT_CODE=$(cat "$RESULTS_DIR/$ip.exit" 2>/dev/null || echo "999")
-    FAILS=$(grep -c '^\s*\[FAIL\]' "$RESULTS_DIR/$ip.log" 2>/dev/null || echo "?")
-    WARNS=$(grep -c '^\s*\[WARN\]' "$RESULTS_DIR/$ip.log" 2>/dev/null || echo "?")
-
-    if [ "$EXIT_CODE" = "0" ]; then
-        echo "  [PASS] $ip (${FAILS} fails, ${WARNS} warns)"
-        FLEET_PASS=$((FLEET_PASS + 1))
+for i in "${!NODES[@]}"; do
+    ip="${NODES[$i]}"
+    task="${TASKS[$i]}"
+    rc="${RESULTS[$i]}"
+    if [ "$rc" -eq 0 ]; then
+        echo "  [PASS] $ip ($task)"
     else
-        echo "  [FAIL] $ip (exit=$EXIT_CODE, ${FAILS} fails, ${WARNS} warns)"
-        grep '^\s*\[FAIL\]' "$RESULTS_DIR/$ip.log" 2>/dev/null | sed 's/^/         /'
-        FLEET_FAIL=$((FLEET_FAIL + 1))
+        echo "  [FAIL] $ip ($task) — exit $rc"
+        grep -E "FAIL|FAST-FAIL" "$LOG_DIR/${ip}_${task}.log" 2>/dev/null | head -3 | sed 's/^/    /'
+        FLEET_FAIL=1
     fi
 done
 
 echo ""
-echo "=== Summary: ${FLEET_PASS} passed, ${FLEET_FAIL} failed ==="
-
-# Cross-node consistency check
-echo ""
-echo "--- Cross-Node Consistency ---"
-
-echo "  HF Cache sizes:"
-for ip in "${NODES[@]}"; do
-    HF_SIZE=$(grep -o 'HF cache exists:.*' "$RESULTS_DIR/$ip.log" 2>/dev/null | head -1)
-    echo "    $ip: ${HF_SIZE:-unknown}"
-done
-
-echo "  Container sizes:"
-for ip in "${NODES[@]}"; do
-    CTR_SIZE=$(grep -o 'Container exists:.*' "$RESULTS_DIR/$ip.log" 2>/dev/null | head -1)
-    echo "    $ip: ${CTR_SIZE:-unknown}"
-done
-
-echo "  Disk space (results dir):"
-for ip in "${NODES[@]}"; do
-    DISK=$(grep -o 'Results dir:.*' "$RESULTS_DIR/$ip.log" 2>/dev/null | head -1)
-    echo "    $ip: ${DISK:-unknown}"
-done
+if [ $FLEET_FAIL -eq 0 ]; then
+    echo "  ALL NODES PASSED — safe to launch fleet"
+else
+    echo "  SOME NODES FAILED — DO NOT LAUNCH"
+    echo "  Full logs: $LOG_DIR/"
+fi
+echo "============================================"
 
 exit $FLEET_FAIL
