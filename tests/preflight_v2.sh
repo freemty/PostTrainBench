@@ -230,18 +230,23 @@ echo "--- Per-slot dry-run ---"
 cleanup_gpu() {
     local gpu_id="$1"
     local pids
-    pids=$(nvidia-smi --id="$gpu_id" --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' || true)
+    pids=$(nvidia-smi --id="$gpu_id" --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -v '^$' || true)
     if [ -n "$pids" ]; then
-        echo "  [cleanup] Killing residual GPU $gpu_id processes: $(echo $pids | tr '\n' ' ')"
-        echo "$pids" | xargs kill -9 2>/dev/null || true
+        echo "  [cleanup] Killing residual GPU $gpu_id processes"
+        echo "$pids" | while read -r pid; do
+            pid=$(echo "$pid" | tr -d ' ')
+            [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+        done
         sleep 2
     fi
-    # Also kill any orphaned vllm/ray processes (not bound to GPU query)
+    # Kill orphaned vllm/ray not visible via nvidia-smi (e.g. APIServer, ray workers)
     local orphans
     orphans=$(pgrep -f "vllm serve|ray::IDLE|EngineCore" 2>/dev/null || true)
     if [ -n "$orphans" ]; then
-        echo "  [cleanup] Killing orphaned vllm/ray: $(echo $orphans | tr '\n' ' ')"
-        echo "$orphans" | xargs kill -9 2>/dev/null || true
+        echo "  [cleanup] Killing orphaned vllm/ray"
+        echo "$orphans" | while read -r pid; do
+            kill -9 "$pid" 2>/dev/null || true
+        done
         sleep 1
     fi
 }

@@ -43,9 +43,14 @@ for candidate in "/opt/uv-bin/uv" "/root/.local/bin/uv" "$(which uv 2>/dev/null)
 done
 
 if [ -n "$UV_BIN" ]; then
-    echo "Installing lemma deps (uv pip install -e)..."
-    "$UV_BIN" pip install --system -e "$LEMMA_ROOT" 2>&1 | tail -10
-    echo "Lemma deps installed."
+    # Skip install if core deps already present (avoids ~30s network hit per job)
+    if ! python3 -c "import anthropic, loguru" 2>/dev/null; then
+        echo "Installing lemma deps (uv pip install -e)..."
+        "$UV_BIN" pip install --system -e "$LEMMA_ROOT" 2>&1 | tail -10
+        echo "Lemma deps installed."
+    else
+        echo "Lemma deps already installed, skipping."
+    fi
 else
     echo "ERROR: no uv found in container — cannot install lemma deps"
     exit 1
