@@ -374,10 +374,14 @@ solve_task() {
     # Resolve GPU UUID for --nvccli hardware isolation (index-based fails for non-GPU-0)
     export NVIDIA_VISIBLE_DEVICES="$(resolve_gpu_uuid)"
 
-    # Dry-run: 1 min timeout (PONG should take <30s). Normal: full budget + 5 min grace.
+    # Dry-run: short timeout for PONG. Lemma needs longer (pip install deps at startup).
     local TIMEOUT_MINS
     if [ "$DRY_RUN" = true ]; then
-        TIMEOUT_MINS=1
+        if [ "$AGENT" = "lemma" ]; then
+            TIMEOUT_MINS=3
+        else
+            TIMEOUT_MINS=1
+        fi
     else
         TIMEOUT_MINS=$((NUM_HOURS * 60 + 5))
     fi

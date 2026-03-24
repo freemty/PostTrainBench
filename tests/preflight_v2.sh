@@ -106,8 +106,145 @@ if [ $FAST_FAIL -gt 0 ]; then
     exit 1
 fi
 
+# ── API connectivity (per unique agent type) ──
+echo ""
+echo "--- API connectivity ---"
+API_FAIL=0
+
+# Collect unique agent types from slots
+declare -A SEEN_AGENTS
+for slot in "${SLOT_ARRAY[@]}"; do
+    agent=$(echo "$slot" | cut -d: -f1)
+    SEEN_AGENTS["$agent"]=1
+done
+
+for agent in "${!SEEN_AGENTS[@]}"; do
+    case "$agent" in
+        claude|claude_v2|claude_non_api|lemma)
+            # These use Bedrock (via Claude CLI with CLAUDE_CODE_USE_BEDROCK=1)
+            if [ "${CLAUDE_CODE_USE_BEDROCK:-}" = "1" ]; then
+                if aws bedrock-runtime invoke-model \
+                    --model-id "global.anthropic.claude-sonnet-4-6" \
+                    --cli-binary-format raw-in-base64-out \
+                    --body '{"anthropic_version":"bedrock-2023-05-31","max_tokens":5,"messages":[{"role":"user","content":"ping"}]}' \
+                    /tmp/preflight_bedrock_test.json >/dev/null 2>&1; then
+                    pass "Bedrock API: OK (for $agent)"
+                else
+                    fail "Bedrock API: FAILED (for $agent) — check AWS creds/region"
+                    API_FAIL=1
+                fi
+            elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+                if curl -sf --max-time 10 https://api.anthropic.com/v1/messages \
+                    -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+                    -H "anthropic-version: 2023-06-01" \
+                    -H "content-type: application/json" \
+                    -d '{"model":"claude-sonnet-4-5-20250514","max_tokens":5,"messages":[{"role":"user","content":"ping"}]}' \
+                    >/dev/null 2>&1; then
+                    pass "Anthropic API: OK (for $agent)"
+                else
+                    fail "Anthropic API: FAILED (for $agent)"
+                    API_FAIL=1
+                fi
+            else
+                fail "No API auth for $agent (need CLAUDE_CODE_USE_BEDROCK=1 or ANTHROPIC_API_KEY)"
+                API_FAIL=1
+            fi
+            ;;
+        codex_horay)
+            # codex_horay uses Horay proxy
+            if [ -z "${HORAY_API_KEY:-}" ]; then
+                fail "HORAY_API_KEY not set (for $agent)"
+                API_FAIL=1
+            else
+                # Try both known Horay endpoints
+                HORAY_OK=false
+                for endpoint in "https://sr-endpoint.horay.ai" "https://openrouter.horay.ai"; do
+                    if curl -sf --max-time 10 "${endpoint}/v1/chat/completions" \
+                        -H "Authorization: Bearer ${HORAY_API_KEY}" \
+                        -H "Content-Type: application/json" \
+                        -d '{"model":"g5.2-rxj","messages":[{"role":"user","content":"ping"}],"max_tokens":5}' \
+                        >/dev/null 2>&1; then
+                        pass "Horay API: OK at ${endpoint} (for $agent)"
+                        HORAY_OK=true
+                        break
+                    fi
+                done
+                if [ "$HORAY_OK" = false ]; then
+                    fail "Horay API: FAILED — all endpoints unreachable (for $agent)"
+                    API_FAIL=1
+                fi
+            fi
+            ;;
+        codex|codexhigh|codexlow)
+            # codex uses OpenAI API (direct or via proxy)
+            if [ -z "${OPENAI_API_KEY:-}" ]; then
+                fail "OPENAI_API_KEY not set (for $agent)"
+                API_FAIL=1
+            else
+                OPENAI_URL="${OPENAI_BASE_URL:-https://api.openai.com}/v1/chat/completions"
+                if curl -sf --max-time 15 "$OPENAI_URL" \
+                    -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+                    -H "Content-Type: application/json" \
+                    -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"ping"}],"max_tokens":5}' \
+                    >/dev/null 2>&1; then
+                    pass "OpenAI API: OK (for $agent)"
+                else
+                    fail "OpenAI API: FAILED at ${OPENAI_URL} (for $agent)"
+                    API_FAIL=1
+                fi
+            fi
+            ;;
+        gemini)
+            if [ -z "${GEMINI_API_KEY:-}" ]; then
+                fail "GEMINI_API_KEY not set (for $agent)"
+                API_FAIL=1
+            else
+                if curl -sf --max-time 10 \
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}" \
+                    -H "Content-Type: application/json" \
+                    -d '{"contents":[{"parts":[{"text":"ping"}]}]}' \
+                    >/dev/null 2>&1; then
+                    pass "Gemini API: OK (for $agent)"
+                else
+                    fail "Gemini API: FAILED (for $agent)"
+                    API_FAIL=1
+                fi
+            fi
+            ;;
+        *)
+            warn "Unknown agent type: $agent — skipping API check"
+            ;;
+    esac
+done
+
+if [ $API_FAIL -gt 0 ]; then
+    echo ""
+    echo "API-FAIL: fix API connectivity before proceeding"
+    exit 1
+fi
+
 echo ""
 echo "--- Per-slot dry-run ---"
+
+# GPU cleanup: kill all processes on a specific GPU (by index)
+cleanup_gpu() {
+    local gpu_id="$1"
+    local pids
+    pids=$(nvidia-smi --id="$gpu_id" --query-compute-apps=pid --format=csv,noheader 2>/dev/null | tr -d ' ' || true)
+    if [ -n "$pids" ]; then
+        echo "  [cleanup] Killing residual GPU $gpu_id processes: $(echo $pids | tr '\n' ' ')"
+        echo "$pids" | xargs kill -9 2>/dev/null || true
+        sleep 2
+    fi
+    # Also kill any orphaned vllm/ray processes (not bound to GPU query)
+    local orphans
+    orphans=$(pgrep -f "vllm serve|ray::IDLE|EngineCore" 2>/dev/null || true)
+    if [ -n "$orphans" ]; then
+        echo "  [cleanup] Killing orphaned vllm/ray: $(echo $orphans | tr '\n' ' ')"
+        echo "$orphans" | xargs kill -9 2>/dev/null || true
+        sleep 1
+    fi
+}
 
 # ── Per-slot dry-run ──
 PASS_COUNT=0
@@ -119,6 +256,9 @@ for slot in "${SLOT_ARRAY[@]}"; do
     gpu=$(echo "$slot" | cut -d: -f2)
     config=$(echo "$slot" | cut -d: -f3)
 
+    # Pre-clean GPU before each slot
+    cleanup_gpu "$gpu"
+
     echo ""
     echo "=== $agent on GPU $gpu (config: $config) ==="
 
@@ -127,6 +267,9 @@ for slot in "${SLOT_ARRAY[@]}"; do
         "$TASK" "$agent" "$MODEL" "dryrun_${EXP}_g${gpu}" 0 "$config" --dry-run
     EXIT_CODE=$?
     set -e
+
+    # Post-clean GPU after each slot
+    cleanup_gpu "$gpu"
 
     if [ $EXIT_CODE -eq 0 ]; then
         pass "$agent GPU $gpu: PASS"

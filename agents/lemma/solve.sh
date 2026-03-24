@@ -32,14 +32,23 @@ fi
 # Add lemma to PYTHONPATH (avoid pip install — /tmp is bind-mounted, uv unreachable)
 export PYTHONPATH="$LEMMA_ROOT:$PYTHONPATH"
 
-# Install lemma's missing dependencies using uv (bind-mounted from host at /opt/uv-bin/)
-# Most heavy deps (anthropic, boto3, pyyaml, requests, etc.) are pre-installed in container
-UV_BIN="/opt/uv-bin/uv"
-if [ -x "$UV_BIN" ]; then
-    echo "Installing lemma deps via uv..."
-    "$UV_BIN" pip install --system -e "$LEMMA_ROOT" --quiet 2>&1 | tail -5
+# Install lemma's missing dependencies via uv
+# Search order: bind-mounted uv, container uv, PATH uv
+UV_BIN=""
+for candidate in "/opt/uv-bin/uv" "/root/.local/bin/uv" "$(which uv 2>/dev/null)"; do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        UV_BIN="$candidate"
+        break
+    fi
+done
+
+if [ -n "$UV_BIN" ]; then
+    echo "Installing lemma deps (uv pip install -e)..."
+    "$UV_BIN" pip install --system -e "$LEMMA_ROOT" 2>&1 | tail -10
+    echo "Lemma deps installed."
 else
-    echo "WARNING: uv not available at $UV_BIN, relying on PYTHONPATH only"
+    echo "ERROR: no uv found in container — cannot install lemma deps"
+    exit 1
 fi
 
 # Map AGENT_CONFIG to lemma model arg
