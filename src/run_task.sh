@@ -321,7 +321,7 @@ print('|'.join([d.get('dataset_id') or '', str(d.get('local', False)), d.get('re
             local ds_org ds_name ds_cache_dir
             ds_org=$(echo "$dataset_id" | cut -d'/' -f1)
             ds_name=$(echo "$dataset_id" | cut -d'/' -f2)
-            ds_cache_dir="${HF_HOME}/datasets/${ds_org}--${ds_name}"
+            ds_cache_dir="${HF_HOME}/datasets/datasets--${ds_org}--${ds_name}"
 
             if [ -d "$ds_cache_dir" ]; then
                 if [ -n "$revision" ]; then

@@ -72,10 +72,10 @@ else
 fi
 
 # Zombie processes from previous experiments
-ZOMBIES=$(pgrep -f "run_task\.sh|claude --print|local_backend\.run|codex --search" 2>/dev/null | wc -l)
+ZOMBIES=$(pgrep -f "run_task\.sh|claude --print|local_backend\.run|codex --search" 2>/dev/null | wc -l || true)
 if [ "$ZOMBIES" -gt 0 ]; then
     fail "$ZOMBIES orphan processes found — run cleanup first"
-    pgrep -af "run_task\.sh|claude --print|local_backend\.run|codex --search" 2>/dev/null | head -5
+    pgrep -af "run_task\.sh|claude --print|local_backend\.run|codex --search" 2>/dev/null | head -5 || true
     FAST_FAIL=1
 else
     pass "No orphan processes"
@@ -85,7 +85,7 @@ fi
 IFS=',' read -ra SLOT_ARRAY <<< "$SLOTS"
 for slot in "${SLOT_ARRAY[@]}"; do
     gpu=$(echo "$slot" | cut -d: -f2)
-    GPU_PROCS=$(nvidia-smi --id="$gpu" --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . || echo 0)
+    GPU_PROCS=$(nvidia-smi --id="$gpu" --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c . || true)
     if [ "$GPU_PROCS" -gt 0 ]; then
         fail "GPU $gpu has $GPU_PROCS active processes"; FAST_FAIL=1
     else
