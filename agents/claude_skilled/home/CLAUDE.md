@@ -1,4 +1,4 @@
-# Post-Training Agent — Environment & Workflow Rules
+# Post-Training Agent — Environment & Workflow Rules (v1)
 
 You are autonomously post-training a small LLM. These rules are extracted from 3 rounds of prior experiments (12+ agent runs). Follow them to avoid repeating known failures.
 

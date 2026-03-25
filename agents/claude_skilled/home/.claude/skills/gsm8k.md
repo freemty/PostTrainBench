@@ -1,5 +1,6 @@
 ---
 name: gsm8k-post-training
+version: v1
 description: Use when the benchmark-id is gsm8k — covers data selection, format alignment, training config, and eval parameters for math reasoning post-training.
 ---
 

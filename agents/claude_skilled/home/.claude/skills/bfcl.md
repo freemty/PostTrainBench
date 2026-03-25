@@ -1,5 +1,6 @@
 ---
 name: bfcl-post-training
+version: v1
 description: Use when the benchmark-id is bfcl — covers data selection, jinja template alignment, training config, and eval parameters for function calling post-training.
 ---
 
