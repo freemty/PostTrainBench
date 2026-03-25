@@ -1,6 +1,8 @@
-# claude_skilled CHANGELOG
+# Skilled Agent CHANGELOG
 
-## v1 — 2026-03-25
+Versioned agent iterations. Each `claude_vNN/` folder is an immutable snapshot.
+
+## claude_v01 — 2026-03-25
 
 Initial skill extraction from exp00a/01b/02a (12+ agent runs, 3 ANALYSIS.md reports, 6 solve_out logs).
 
