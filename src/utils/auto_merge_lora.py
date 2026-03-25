@@ -69,8 +69,10 @@ def main():
 
         print(f"AUTO-MERGE: done — merged model saved to {final_model_dir}")
 
-    except (MemoryError, RuntimeError, Exception) as e:
+    except Exception as e:
+        import traceback
         print(f"AUTO-MERGE: failed — {e}")
+        traceback.print_exc()
         sys.exit(1)
 
 
