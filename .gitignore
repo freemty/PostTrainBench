@@ -6,6 +6,9 @@ test*.log
 agents/*/auth.json
 agents/*/oauth_token
 
+# Versioned agents live in parent repo (fars-autotrain/agents/), not here
+agents/claude_v*/
+
 .claude 
 
 AGENTS.md
