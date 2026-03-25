@@ -735,6 +735,7 @@ run_evaluation() {
         MERGE_EXIT=$?
         if [ $MERGE_EXIT -eq 0 ]; then
             echo "AUTO-MERGE: success"
+            echo "true" > "$EVAL_DIR/.auto_merged"
         else
             echo "AUTO-MERGE: failed (exit $MERGE_EXIT), proceeding with original files"
         fi
@@ -879,6 +880,18 @@ case "${EVALUATION_TASK}" in
 esac
 
 run_evaluation_with_retry 2 "$MAX_TOKENS_ARG"
+
+# Inject auto_merged flag into metrics.json if LoRA was auto-merged
+if [ -f "$EVAL_DIR/.auto_merged" ] && [ -f "${EVAL_DIR}/metrics.json" ]; then
+    python3 -c "
+import json, sys
+with open('${EVAL_DIR}/metrics.json') as f: m = json.load(f)
+m['auto_merged'] = True
+with open('${EVAL_DIR}/metrics.json', 'w') as f: json.dump(m, f, indent=2)
+print('Injected auto_merged=true into metrics.json')
+" 2>/dev/null
+    rm -f "$EVAL_DIR/.auto_merged"
+fi
 
 echo $(cat "$EVAL_DIR/final_eval_${EVAL_COUNTER}.txt")
 
