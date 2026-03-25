@@ -223,6 +223,67 @@ if [ $API_FAIL -gt 0 ]; then
     exit 1
 fi
 
+# ── Network reachability (warn only — CN network is unreliable) ──
+echo ""
+echo "--- Network reachability ---"
+NET_WARN=0
+
+# HF endpoint
+HF_REACHABLE=false
+for endpoint in "${HF_ENDPOINT:-}" "https://hf-mirror.com" "https://huggingface.co"; do
+    [ -z "$endpoint" ] && continue
+    speed=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "${endpoint}/api/models" 2>/dev/null || echo "0")
+    speed="${speed//[^0-9.]/}"
+    if awk "BEGIN{exit(${speed:-0} > 10000 ? 0 : 1)}"; then
+        pass "HF endpoint: ${endpoint} reachable (${speed} B/s)"
+        HF_REACHABLE=true
+        break
+    fi
+done
+if [ "$HF_REACHABLE" = false ]; then
+    warn "HF endpoint: all unreachable (hf-mirror.com + huggingface.co)"
+    warn "  -> agent cannot download new datasets/models at runtime"
+    NET_WARN=1
+fi
+
+# PyPI / UV mirror
+PYPI_OK=false
+for mirror in "${UV_INDEX_URL:-}" "https://mirrors.aliyun.com/pypi/simple/pip/" "https://pypi.org/simple/pip/"; do
+    [ -z "$mirror" ] && continue
+    speed=$(curl -m 5 -s -o /dev/null -w '%{speed_download}' "$mirror" 2>/dev/null || echo "0")
+    speed="${speed//[^0-9.]/}"
+    if awk "BEGIN{exit(${speed:-0} > 5000 ? 0 : 1)}"; then
+        pass "PyPI mirror: $(echo "$mirror" | cut -d'/' -f3) reachable"
+        PYPI_OK=true
+        break
+    fi
+done
+if [ "$PYPI_OK" = false ]; then
+    warn "PyPI: all mirrors unreachable"
+    warn "  -> lemma agent cannot install runtime deps (anthropic, etc.)"
+    NET_WARN=1
+fi
+
+# GitHub (needed for inspect_evals clone during eval)
+GH_OK=false
+for gh_host in "github.com" "gh-proxy.com"; do
+    if curl -m 5 -sf "https://${gh_host}" >/dev/null 2>&1; then
+        pass "GitHub: ${gh_host} reachable"
+        GH_OK=true
+        break
+    fi
+done
+if [ "$GH_OK" = false ]; then
+    warn "GitHub: unreachable (github.com + gh-proxy.com)"
+    warn "  -> eval may fail if inspect_evals not pre-cloned"
+    NET_WARN=1
+fi
+
+if [ $NET_WARN -gt 0 ]; then
+    warn "Network issues detected — experiment may be degraded"
+    warn "Consider: pre-cache all datasets, pre-clone inspect_evals"
+fi
+
 echo ""
 echo "--- Per-slot dry-run ---"
 

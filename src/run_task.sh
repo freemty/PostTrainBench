@@ -163,6 +163,17 @@ if [ "$AGENT" = "lemma" ]; then
 fi
 
 # Copy scripts needed inside the container
+# Defensive env file: sourced inside container as fallback for --env vars
+# (workaround for possible --nvccli + --env interaction bug observed in exp02a)
+cat > "${JOB_DIR}/.container_env" <<ENVEOF
+export HF_HOME="${HF_HOME_NEW}"
+export HF_TOKEN="${HF_TOKEN:-}"
+export HF_ENDPOINT="${HF_ENDPOINT:-}"
+export HF_DATASETS_CACHE="${HF_HOME_NEW}/datasets"
+export TMPDIR="/tmp"
+export CUDA_VISIBLE_DEVICES="0"
+ENVEOF
+
 cp src/utils/check_cuda.py "${JOB_DIR}/check_cuda.py"
 cp src/utils/check_cuda_writing.py "${JOB_DIR}/check_cuda_writing.py"
 cp "agents/${AGENT}/solve.sh" "${JOB_DIR}/agent_solve.sh"
@@ -409,6 +420,7 @@ solve_task() {
         --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
         --env HF_TOKEN="${HF_TOKEN:-}" \
         --env UV_INDEX_URL="${UV_INDEX_URL:-}" \
+        --env TMPDIR="/tmp" \
         --bind "${JOB_TMP}:/tmp" \
         --bind "${HF_MERGED}:${HF_HOME_NEW}" \
         ${LOCAL_LEMMA_BIND:+--bind "${LOCAL_LEMMA_BIND}:/opt/local-lemma"} \
@@ -418,7 +430,7 @@ solve_task() {
         --pwd "/home/ben/task" \
         --writable-tmpfs \
         "${POST_TRAIN_BENCH_CONTAINERS_DIR}/${POST_TRAIN_BENCH_CONTAINER_NAME}.sif" \
-        bash -c "python3 /home/ben/check_cuda.py && python3 /home/ben/check_cuda_writing.py && bash /home/ben/agent_solve.sh" > "${SOLVE_OUT}" 2>&1
+        bash -c "source /home/ben/.container_env && python3 /home/ben/check_cuda.py && python3 /home/ben/check_cuda_writing.py && bash /home/ben/agent_solve.sh" > "${SOLVE_OUT}" 2>&1
 }
 
 export REPO_ROOT="$(pwd)"
@@ -452,9 +464,92 @@ if [ "$DRY_RUN" = true ]; then
         exit 1
     fi
 
-    # Step 2: vLLM eval chain test — serve base model, health check, one inference
-    echo "DRY-RUN: testing vLLM eval chain with base model..."
+    # Step 1.5: Container environment verification
+    echo "DRY-RUN: verifying container environment..."
     export NVIDIA_VISIBLE_DEVICES="$(resolve_gpu_uuid)"
+    ENV_CHECK_RESULT=$(apptainer exec --nvccli \
+        --env HF_HOME="${HF_HOME_NEW}" \
+        --env HF_TOKEN="${HF_TOKEN:-}" \
+        --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+        --env TMPDIR="/tmp" \
+        --env NVIDIA_VISIBLE_DEVICES="${NVIDIA_VISIBLE_DEVICES}" \
+        --env CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+        --env MODEL_TO_TRAIN="${MODEL_TO_TRAIN}" \
+        --bind "${JOB_TMP}:/tmp" \
+        --bind "${HF_MERGED}:${HF_HOME_NEW}" \
+        --home "${JOB_DIR}:/home/ben" \
+        --writable-tmpfs \
+        "${CONTAINER}" \
+        python3 -c "
+import os, sys, json, glob
+
+checks = {}
+hf_home = os.environ.get('HF_HOME', '')
+checks['hf_home_set'] = bool(hf_home)
+checks['hf_home_exists'] = os.path.isdir(hf_home) if hf_home else False
+checks['hf_token_set'] = bool(os.environ.get('HF_TOKEN', ''))
+
+try:
+    import torch
+    checks['gpu_count'] = torch.cuda.device_count()
+    checks['gpu_ok'] = checks['gpu_count'] == 1
+except Exception as e:
+    checks['gpu_count'] = -1
+    checks['gpu_ok'] = False
+
+import tempfile
+try:
+    with tempfile.NamedTemporaryFile(dir='/tmp', delete=True) as f:
+        f.write(b'test')
+    checks['tmp_writable'] = True
+except Exception:
+    checks['tmp_writable'] = False
+
+model_name = os.environ.get('MODEL_TO_TRAIN', '')
+if hf_home and model_name:
+    model_safe = model_name.replace('/', '--')
+    model_dir = os.path.join(hf_home, 'hub', f'models--{model_safe}')
+    checks['model_cached'] = os.path.isdir(model_dir)
+    if checks['model_cached']:
+        safetensors = glob.glob(os.path.join(model_dir, '**', '*.safetensors'), recursive=True)
+        checks['model_safetensors'] = len(safetensors)
+        snaps = glob.glob(os.path.join(model_dir, 'snapshots', '*'))
+        checks['preprocessor_config_available'] = any(
+            os.path.isfile(os.path.join(s, 'preprocessor_config.json')) for s in snaps
+        ) if snaps else False
+    else:
+        checks['preprocessor_config_available'] = False
+else:
+    checks['model_cached'] = False
+    checks['preprocessor_config_available'] = False
+
+# Also check .container_env is sourceable
+checks['container_env_exists'] = os.path.isfile('/home/ben/.container_env')
+
+failed = []
+if not checks.get('hf_home_set'): failed.append('HF_HOME not set')
+if not checks.get('hf_home_exists'): failed.append('HF_HOME dir missing')
+if not checks.get('hf_token_set'): failed.append('HF_TOKEN not set')
+if not checks.get('gpu_ok'): failed.append(f\"GPU count={checks.get('gpu_count',-1)}, expected 1\")
+if not checks.get('tmp_writable'): failed.append('/tmp not writable')
+if not checks.get('model_cached'): failed.append('base model not in HF cache')
+if checks.get('model_cached') and not checks.get('preprocessor_config_available'): failed.append('preprocessor_config.json missing')
+if not checks.get('container_env_exists'): failed.append('.container_env not found')
+
+print(json.dumps({'ok': len(failed) == 0, 'failed': failed, 'checks': checks}))
+sys.exit(0 if len(failed) == 0 else 1)
+" 2>&1)
+    ENV_EXIT=$?
+    echo "  env-check: $ENV_CHECK_RESULT"
+    if [ $ENV_EXIT -ne 0 ]; then
+        echo "DRY-RUN FAIL: container environment check failed"
+        exit 1
+    fi
+    echo "DRY-RUN: container environment — OK"
+
+    # Step 2: vLLM eval chain test — serve base model, health check, one inference
+    # Uses --nv (not --nvccli) to match eval phase (--nvccli breaks vLLM EngineCore)
+    echo "DRY-RUN: testing vLLM eval chain with base model..."
     VLLM_PORT=$((40000 + RANDOM % 10000))
 
     # Determine chat template
@@ -467,10 +562,11 @@ if [ "$DRY_RUN" = true ]; then
     TEMPLATE_ARG=""
     [ -n "$CHAT_TEMPLATE" ] && TEMPLATE_ARG="--chat-template ${REPO_ROOT}/${CHAT_TEMPLATE}"
 
-    timeout 150s apptainer exec --nvccli \
+    timeout 150s apptainer exec --nv \
         --env "HF_HOME=${HF_MERGED}" \
         --env VLLM_API_KEY="inspectai" \
         --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+        --env HF_TOKEN="${HF_TOKEN:-}" \
         --env TMPDIR="${JOB_TMP}" \
         --writable-tmpfs \
         --bind "${HF_MERGED}:${HF_MERGED}" \
@@ -677,6 +773,52 @@ export EVAL_COUNTER=0
 run_evaluation() {
     local max_tokens_arg="$1"
     local eval_num="$2"
+
+    # --- Auto-merge LoRA adapter if detected (eval robustness, exp02a lesson) ---
+    local final_model="$EVAL_DIR/final_model"
+    if [ -d "$final_model" ] && [ -f "$final_model/adapter_config.json" ]; then
+        echo "AUTO-MERGE: detected LoRA adapter in final_model, merging..."
+        apptainer exec --nv \
+            --env "HF_HOME=${HF_MERGED}" \
+            --env HF_ENDPOINT="${HF_ENDPOINT:-}" \
+            --env HF_TOKEN="${HF_TOKEN:-}" \
+            --writable-tmpfs \
+            --bind "${HF_MERGED}:${HF_MERGED}" \
+            --bind "${EVAL_DIR}:${EVAL_DIR}" \
+            --bind "${REPO_ROOT}:${REPO_ROOT}" \
+            "${CONTAINER}" \
+            python3 "${REPO_ROOT}/src/utils/auto_merge_lora.py" \
+                "$final_model" "$MODEL_TO_TRAIN"
+        MERGE_EXIT=$?
+        if [ $MERGE_EXIT -eq 0 ]; then
+            echo "AUTO-MERGE: success"
+        else
+            echo "AUTO-MERGE: failed (exit $MERGE_EXIT), proceeding with original files"
+        fi
+    fi
+
+    # --- Auto-complete missing model files (eval robustness, exp02a lesson) ---
+    if [ -d "$final_model" ]; then
+        local model_safe=$(echo "$MODEL_TO_TRAIN" | sed 's|/|--|g')
+        local base_cache="${HF_MERGED}/hub/models--${model_safe}"
+        local base_snap=$(find "$base_cache/snapshots" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
+
+        if [ -n "$base_snap" ]; then
+            # preprocessor_config.json (required by vLLM for Gemma3 multimodal detection)
+            if [ ! -f "$final_model/preprocessor_config.json" ] && [ -f "$base_snap/preprocessor_config.json" ]; then
+                cp "$base_snap/preprocessor_config.json" "$final_model/"
+                echo "AUTO-FIX: copied preprocessor_config.json from base model cache"
+            fi
+            # tokenizer files (save_pretrained sometimes misses sentencepiece model)
+            for tf in tokenizer.model tokenizer.json tokenizer_config.json special_tokens_map.json; do
+                if [ ! -f "$final_model/$tf" ] && [ -f "$base_snap/$tf" ]; then
+                    cp "$base_snap/$tf" "$final_model/"
+                    echo "AUTO-FIX: copied $tf from base model cache"
+                fi
+            done
+        fi
+    fi
+
     # Kill ALL GPU processes on our device (training may have leaked to other contexts)
     nvidia-smi --id="${CUDA_VISIBLE_DEVICES:-0}" --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9 2>/dev/null || true
     # Kill leaked vLLM server processes (scoped to avoid killing the running agent)
