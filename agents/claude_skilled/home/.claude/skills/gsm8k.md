@@ -1,16 +1,19 @@
+---
+name: gsm8k-post-training
+description: Use when the benchmark-id is gsm8k — covers data selection, format alignment, training config, and eval parameters for math reasoning post-training.
+---
+
 # GSM8K Post-Training Skill
 
-Best known result: 57.9% (LoRA + 247K samples, 10h budget) and 51.9% (LoRA + 60K samples, 3h active).
+Best known result: 57.9% (LoRA + 247K samples, 10h) and 51.9% (LoRA + 60K samples, 3h active).
 
-## Winning Strategy
-
-### Data
+## Data
 - **Primary**: MetaMathQA GSM subset (~120K samples of chain-of-thought math). `load_dataset("meta-math/MetaMathQA", split="train")`, filter by `'GSM' in x['type']`.
 - **Supplement**: GSM8K train split (7,473 samples). `load_dataset("openai/gsm8k", "main", split="train")`
 - **Total**: 15K-60K samples is the sweet spot. 240K works but takes longer. <15K is insufficient.
 - **NEVER use GSM8K test data** — contamination judge will flag it.
 
-### Format Alignment (THIS IS THE #1 FACTOR)
+## Format Alignment (THIS IS THE #1 FACTOR)
 Read `evaluate.py` and the gsm8k inspect task source to understand the exact eval format. Your training data format MUST match. For gemma-3:
 ```
 <start_of_turn>user
@@ -21,7 +24,7 @@ Read `evaluate.py` and the gsm8k inspect task source to understand the exact eva
 ```
 The answer line MUST end with `#### {number}` — this is how the eval extracts the final answer.
 
-### Training Config (proven on H20 96GB)
+## Training Config (proven on H20 96GB)
 ```python
 # LoRA config
 LoraConfig(
@@ -47,14 +50,14 @@ SFTConfig(
 )
 ```
 
-### Quick Iteration Pattern
+## Quick Iteration Pattern
 1. Train on 15K samples, 1 epoch (~20 min on H20)
 2. Merge LoRA, eval `--limit 50` (~2 min)
 3. If >25%, scale to 60K samples, 2 epochs
 4. Merge best checkpoint, eval `--limit 150`
 5. Save as `final_model/`
 
-### Eval Command
+## Eval Command
 ```bash
 python3 evaluate.py --model-path ./final_model --limit 50 --max-connections 32 --gpu-memory-utilization 0.5
 ```
