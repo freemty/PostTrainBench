@@ -1,21 +1,25 @@
 ---
 name: gsm8k-post-training
-version: v1
-description: Use when the benchmark-id is gsm8k — covers data selection, format alignment, training config, and eval parameters for math reasoning post-training.
+version: v1.1
+description: Use when the benchmark-id is gsm8k — data selection, format alignment, and training strategy for math reasoning.
 ---
 
-# GSM8K Post-Training Skill
+# GSM8K Post-Training
 
-Best known result: 57.9% (LoRA + 247K samples, 10h) and 51.9% (LoRA + 60K samples, 3h active).
+Best results: 57.9% (LoRA + 247K, 10h) and 51.9% (LoRA + 60K, 3h active).
 
-## Data
-- **Primary**: MetaMathQA GSM subset (~120K samples of chain-of-thought math). `load_dataset("meta-math/MetaMathQA", split="train")`, filter by `'GSM' in x['type']`.
-- **Supplement**: GSM8K train split (7,473 samples). `load_dataset("openai/gsm8k", "main", split="train")`
-- **Total**: 15K-60K samples is the sweet spot. 240K works but takes longer. <15K is insufficient.
-- **NEVER use GSM8K test data** — contamination judge will flag it.
+## Data Selection
 
-## Format Alignment (THIS IS THE #1 FACTOR)
-Read `evaluate.py` and the gsm8k inspect task source to understand the exact eval format. Your training data format MUST match. For gemma-3:
+- **Primary**: MetaMathQA GSM subset (~120K chain-of-thought math). Filter: `'GSM' in x['type']`
+- **Supplement**: GSM8K train (7,473 samples)
+- **Sweet spot**: 15K-60K samples. <15K insufficient, >240K diminishing returns.
+- **NEVER use GSM8K test** — contamination judge flags it.
+
+## Format Alignment (THE #1 FACTOR)
+
+Read `evaluate.py` source. Your training format MUST match eval format exactly.
+
+For gemma-3:
 ```
 <start_of_turn>user
 [math question]<end_of_turn>
@@ -23,43 +27,38 @@ Read `evaluate.py` and the gsm8k inspect task source to understand the exact eva
 [step-by-step solution]
 #### [numeric answer]<end_of_turn>
 ```
-The answer line MUST end with `#### {number}` — this is how the eval extracts the final answer.
 
-## Training Config (proven on H20 96GB)
+The `#### {number}` line is how eval extracts the answer. Missing this = 0% accuracy.
+
+## Training Strategy Decision
+
+```
+Time budget > 5h AND data > 30K?
+  → LoRA r=64, 2 epochs, lr=2e-4
+Time budget 1-5h?
+  → LoRA r=64, 1 epoch on 15K, lr=2e-4
+Time budget < 1h?
+  → Full SFT on 7K GSM8K train, 1 epoch (simpler, no merge)
+```
+
+### LoRA Config (proven)
 ```python
-# LoRA config
-LoraConfig(
-    r=64, lora_alpha=128, lora_dropout=0.05,
+LoraConfig(r=64, lora_alpha=128, lora_dropout=0.05,
     target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"],
-    bias="none", task_type="CAUSAL_LM"
-)
-
-# Training args
-SFTConfig(
-    num_train_epochs=2,
-    per_device_train_batch_size=8,
-    learning_rate=2e-4,
-    lr_scheduler_type="cosine",
-    warmup_ratio=0.05,
-    bf16=True,
-    gradient_checkpointing=True,
-    optim="adamw_torch_fused",
-    save_steps=500,
-    save_total_limit=2,
-    max_length=512,  # NOT max_seq_length (deprecated in trl 0.27.2)
-    logging_steps=50,
-)
+    bias="none", task_type="CAUSAL_LM")
 ```
 
-## Quick Iteration Pattern
-1. Train on 15K samples, 1 epoch (~20 min on H20)
-2. Merge LoRA, eval `--limit 50` (~2 min)
-3. If >25%, scale to 60K samples, 2 epochs
-4. Merge best checkpoint, eval `--limit 150`
-5. Save as `final_model/`
-
-## Eval Command
-```bash
-python3 evaluate.py --model-path ./final_model --limit 50 --max-connections 32 --gpu-memory-utilization 0.5
+### SFTConfig (proven)
+```python
+SFTConfig(per_device_train_batch_size=8, learning_rate=2e-4,
+    lr_scheduler_type="cosine", warmup_ratio=0.05, bf16=True,
+    gradient_checkpointing=True, optim="adamw_torch_fused",
+    max_length=512, save_steps=500, save_total_limit=2)
 ```
-`--max-connections 32` is critical — default of 2 takes 3+ hours for 1319 questions.
+
+## Quick Iteration
+
+1. Train 15K, 1 epoch (~20 min) → merge → eval `--limit 50`
+2. If >25% → scale to 60K, 2 epochs
+3. Merge best checkpoint → eval `--limit 150`
+4. Save as `final_model/`

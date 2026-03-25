@@ -2,7 +2,31 @@
 
 Versioned agent iterations. Each `claude_vNN/` folder is an immutable snapshot.
 
-## claude_v01 — 2026-03-25
+## claude_v01 v1.1 — 2026-03-25
+
+Restructured per "Skill vs CLAUDE.md vs 自动化" layering principle.
+
+### Breaking changes
+- CLAUDE.md stripped to environment facts only (paths, versions, pre-cached datasets, eval params)
+- Decision logic moved to dedicated skill files
+
+### New skills
+- `time-budget.md` v1: 时间分配表、ETA 计算、wait 策略、迭代停止决策
+- `model-packaging.md` v1: LoRA merge 流程、文件完整性清单、退出前自检、OOM 降级
+
+### Updated skills
+- `gsm8k.md` v1→v1.1: 移除 eval 参数（→ CLAUDE.md）、新增训练策略决策树（按时间预算分支）
+- `bfcl.md` v1→v1.1: 移除 eval 参数（→ CLAUDE.md）、新增训练策略决策树
+
+### CLAUDE.md v1→v1.1
+- 新增预缓存数据集表（211 个数据集中的关键 9 个 + 完整列表路径）
+- 新增 eval 参数表（per-task --max-connections / --gpu-memory-utilization）
+- 移除决策逻辑（时间管理、LoRA vs SFT、completion-only loss → skills）
+- 移除可自动化项（python3 提示、preprocessor_config 提示 → 已由 run_task.sh 处理）
+
+---
+
+## claude_v01 v1 — 2026-03-25 (superseded)
 
 Initial skill extraction from exp00a/01b/02a (12+ agent runs, 3 ANALYSIS.md reports, 6 solve_out logs).
 
