@@ -31,7 +31,7 @@ which apptainer >/dev/null 2>&1 || sanity_fail "apptainer not found"
 nvidia-smi >/dev/null 2>&1 || sanity_fail "nvidia-smi failed (no GPU?)"
 
 if [ $SANITY_FAIL -gt 0 ]; then
-    echo "Aborting: $SANITY_FAIL sanity check(s) failed. Run 'bash tests/preflight.sh' for full diagnostics." >&2
+    echo "Aborting: $SANITY_FAIL sanity check(s) failed. Run 'bash tests/preflight_v2.sh' for full diagnostics." >&2
     exit 1
 fi
 
