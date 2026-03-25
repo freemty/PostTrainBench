@@ -2,6 +2,39 @@
 
 Versioned agent iterations. Each `claude_vNN/` folder is an immutable snapshot.
 
+## claude_v02 — 2026-03-25
+
+Reflection-pipeline-driven update. Generated from `reflect/runs/exp02a/` (58 evidence → 18 patterns → 12 harness changes).
+
+### CLAUDE.md v1.1 → v2 (+54 lines)
+- hc-001: Library version gotchas table (TRL 0.27.2 / transformers 4.57.3 API renames)
+- hc-002: Single GPU fact + explicit DDP/DataParallel prohibition
+- hc-008: CN network constraints + HF_HOME fallback path + pre-cached dataset emphasis
+- hc-011: Fast startup protocol (10 turns to first training)
+
+### time-budget.md v1 → v2 (+56 lines)
+- hc-003: Wait strategy strengthened (`wait $PID`, sleep >60s prohibition)
+- hc-004: Exit strategy with 50%/75% checkpoints + ETA calculation
+- hc-009: SIGTERM handler template + save_steps checkpoint protection
+
+### gsm8k.md v1.1 → v2 (+21 lines)
+- hc-005: Format-first protocol (read eval source within 5 turns)
+- hc-010: Data scaling decision tree (self-eval before adding data)
+
+### bfcl.md v1.1 → v2 (+8 lines)
+- hc-006: Template-first format alignment (locate jinja within 5 turns)
+
+### model-packaging.md v1 → v2 (+34 lines)
+- hc-007: Two-stage self-eval protocol (--limit eval before final submission)
+- hc-012: Safe process management (pkill -f prohibition, pgrep + kill pattern)
+
+### Evidence chain
+- Source: `reflect/runs/exp02a/` (6 jobs, 58 evidence items, 18 patterns)
+- 13 confirmed patterns addressed, 5 provisional deferred
+- Full traceability: harness_change → pattern_ids → evidence_ids → solve_out line numbers
+
+---
+
 ## claude_v01 v1.1 — 2026-03-25
 
 Restructured per "Skill vs CLAUDE.md vs 自动化" layering principle.
@@ -56,3 +89,13 @@ Initial skill extraction from exp00a/01b/02a (12+ agent runs, 3 ANALYSIS.md repo
 - exp00a: Claude Opus × 4 models × gsm8k (1h) — format alignment discovery, contamination lesson
 - exp01b: Claude + Codex × 4 models × gsm8k (10h) — LoRA merge, label masking, overlay disaster
 - exp02a: Claude + Codex + Lemma × gsm8k + bfcl (10h) — bfcl 87%, sleep waste, DDP failure
+
+---
+
+## claude_v00 — 2026-03-25
+
+Baseline snapshot. Naked agent with zero injected knowledge — identical to `agents/claude/`.
+
+- No `home/` directory (no CLAUDE.md, no skills)
+- `solve.sh` unchanged from upstream
+- Used in exp00a, exp01b, exp02a as the unaugmented baseline
