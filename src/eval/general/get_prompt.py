@@ -40,9 +40,64 @@ def main():
 
     datetime = subprocess.run(['date', '-u'], capture_output=True, text=True).stdout.strip()
 
-    # Disabled: version injection caused codex to plan instead of execute (exp02a regression)
-    # TODO: re-enable after fixing — must run INSIDE container, not on host
-    env_versions = ""
+    # Build environment specification from runtime env vars.
+    # This tells agents about infrastructure paths so they don't waste time discovering them.
+    env_spec_lines = []
+
+    hf_home = os.environ.get('HF_HOME') or os.environ.get('HF_HOME_NEW')
+    if hf_home:
+        env_spec_lines.append(f"- HuggingFace cache is at `{hf_home}`. Datasets cache is at `{hf_home}/datasets`.")
+
+    hf_endpoint = os.environ.get('HF_ENDPOINT')
+    if hf_endpoint:
+        env_spec_lines.append(f"- HuggingFace mirror endpoint: `{hf_endpoint}`. Use this instead of huggingface.co for downloads.")
+
+    uv_index = os.environ.get('UV_INDEX_URL')
+    if uv_index:
+        env_spec_lines.append(f"- PyPI mirror: `{uv_index}`. Use `uv pip install --system --index-url {uv_index} <pkg>` for package installation.")
+
+    # Network constraints + local cache inventory
+    # Scan HF cache to tell agent exactly what's available locally
+    cached_models = []
+    cached_datasets = []
+    if hf_home:
+        hub_dir = Path(hf_home) / "hub"
+        ds_dir = Path(hf_home) / "datasets"
+        if hub_dir.is_dir():
+            cached_models = sorted(
+                d.name.replace("models--", "").replace("--", "/")
+                for d in hub_dir.iterdir()
+                if d.is_dir() and d.name.startswith("models--")
+            )
+        if ds_dir.is_dir():
+            cached_datasets = sorted(
+                d.name.replace("datasets--", "").replace("--", "/")
+                for d in ds_dir.iterdir()
+                if d.is_dir() and d.name.startswith("datasets--")
+            )
+
+    net_lines = ["- **Internet is restricted.** Direct access to huggingface.co, github.com, and most foreign sites is blocked or extremely slow. Prefer locally cached data over downloading."]
+    if cached_models:
+        net_lines.append(f"- **Locally cached models**: {', '.join(f'`{m}`' for m in cached_models)}")
+    if cached_datasets:
+        net_lines.append(f"- **Locally cached datasets**: {', '.join(f'`{d}`' for d in cached_datasets)}")
+    if cached_models or cached_datasets:
+        net_lines.append("- These are ready to use with `transformers`/`datasets` — no download needed. Anything NOT listed above may be unreachable.")
+
+    env_spec_lines.extend(net_lines)
+
+    # Single GPU — prevent DDP/DataParallel attempts
+    env_spec_lines.append("- You have exactly **1 GPU** (CUDA device 0). Do NOT use DataParallel, DDP, or multi-GPU training — it will fail.")
+
+    # Persistent log directory (survives container teardown)
+    eval_dir = os.environ.get('EVAL_DIR')
+    if eval_dir:
+        env_spec_lines.append(f"- Persistent log directory: `{eval_dir}` (shared filesystem, survives container teardown). Write training logs, loss curves, and metrics here so they are preserved. Do NOT write model weights or checkpoints here — only lightweight text/JSON logs.")
+
+    if env_spec_lines:
+        env_versions = "\n## Environment\n" + "\n".join(env_spec_lines) + "\n\n"
+    else:
+        env_versions = ""
 
     result = template.replace('{model}', args.model_to_train)
     result = result.replace('{benchmark}', benchmark_name)
