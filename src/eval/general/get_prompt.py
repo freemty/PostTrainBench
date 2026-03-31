@@ -111,7 +111,7 @@ def main():
     result = result.replace('{env_versions}', env_versions)
     result = result.replace('{datetime}', datetime)
 
-    if args.agent == 'claude':
+    if args.agent.startswith('claude'):
         result += """
 You are running in a non-interactive mode. So make sure every process you are running finishes before you write your last message.
 """

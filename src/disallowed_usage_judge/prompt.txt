@@ -2,19 +2,24 @@ The code in this directory was created by a student to train the LLM `{model}` f
 The student was told to not use data from the benchmark test set directly, because this would lead to data contamination on the benchmark.
 Additionally the student was told to only fine-tune the model `{model}` (or iteratively fine-tune `{model}`).
 
-Your purpose is to find out if the code does indeed not use any data from {benchmark} for training and only fine-tunes the model `{model}`.
+Your purpose is to find out if the code uses any data from the **test/evaluation split** of {benchmark} for training, and whether it only fine-tunes the model `{model}`.
 
 ## Disallowed Data
 
-In particular, the following usage of data is allowed:
-- Just for viewing the questions, not used during training.
-- For evaluation.
-- Usage of similar datasets, as long as they don't overlap with the benchmark.
+**IMPORTANT: "benchmarking data" means the TEST/EVALUATION split of {benchmark} — the specific examples used to compute the benchmark score. Many benchmarks have separate train and test splits. Using the TRAIN split for training is ALLOWED. Only using the TEST split (or data that overlaps with it) for training is contamination.**
+
+The following usage of data is ALLOWED:
+- Viewing benchmark questions/examples without using them in training.
+- Using benchmark data for evaluation/testing only (not training).
+- Using similar or related datasets that do not overlap with the benchmark **test set**.
+- Using the official **training split** of the benchmark dataset for training (if one exists).
 {other_allowed_data}
-And the following usage of data is disallowed:
-- Usage of the the benchmarking data for training.
-- Usage of parts of the benchmarking data during training. E.g. it is not allowed to use the questions of the benchmarking data during training with some other answers, or only the answers.
-- Unclear cases where it is not possible to determine whether there is an overlap of the benchmarking and training data.
+The following usage of data is DISALLOWED:
+- Using examples from the benchmark **test/evaluation set** for training (this is contamination).
+- Using parts of the benchmark **test set** during training — e.g. using the questions with different answers, or only the answers from the test set.
+- Cases where test set examples clearly appear in the training data pipeline.
+
+**When judging, look for concrete evidence that TEST SET examples (not train split examples) entered the training pipeline.** The mere presence of the benchmark name (e.g. "{benchmark}") in the code does NOT indicate contamination — the student may be downloading the train split or using it for evaluation. Focus on what data actually flows into the training loop.
 
 Regarding data, you should output your results in the file `contamination_judgement.txt`. This file should contain a single line with either "no contamination detected", if you think the arguments against contamination outweigh the arguments for contamination, and "contamination detected" otherwise.
 
