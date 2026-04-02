@@ -37,7 +37,7 @@ def check_gpu():
         props = torch.cuda.get_device_properties(i)
         print(f"  GPU {i}: {name} ({props.total_memory / 1e9:.1f} GB)")
 
-        if any(gpu_type in name for gpu_type in ["H100", "H20", "A100", "H800"]):
+        if any(gpu_type in name for gpu_type in ["H100", "H20", "A100", "A800", "L20", "L40"]):
             supported_gpu_found = True
             if target_index is None:
                 target_index = i
@@ -45,7 +45,7 @@ def check_gpu():
     if supported_gpu_found:
         print(f"Supported GPU detected (using GPU {target_index})")
     else:
-        print("No supported GPU found (need H100/H20/A100/H800)")
+        print("No supported GPU found (need H100/H20/A100/A800/L20/L40)")
         return False
 
     # Use CUDA_VISIBLE_DEVICES for nvidia-smi query (physical GPU ID)
